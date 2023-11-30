@@ -74,7 +74,6 @@ impl SupabaseClient {
         let client = reqwest::Client::new();
         let new_id = generate_id();
         body["id"] = json!(new_id);
-        println!("{:#?}", body);
 
         // Make a GET request to the user endpoint
         let response = match client
