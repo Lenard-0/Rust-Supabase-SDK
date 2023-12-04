@@ -10,4 +10,5 @@ To get started simply initialise a SupaBaseClient through SupaBaseClient::new(su
 
 Most requests follow the same structure and require the (table name, id | search param, Option<body>)
 
-If you want new features or improvements let me know.
+If you want new features or improvements let me know through the Github:
+https://github.com/Lenard-0/Rust-Supabase-SDK
