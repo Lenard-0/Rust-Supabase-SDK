@@ -54,4 +54,45 @@ mod tests {
         assert_eq!(json_token["access_token"], "test");
         assert_eq!(json_token["refresh_token"], "test");
     }
+
+    #[tokio::test]
+    async fn can_upsert_and_delete() {
+        dotenv().ok(); // Load environment variables from .env file
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_KEY").unwrap(),
+        );
+
+        let id = generate_id();
+
+        supabase_client.upsert("access_token", &id, json!(
+            {
+                "access_token": "upsert_test",
+                "refresh_token": "upsert_test",
+                "expires_in": Utc::now().to_string()
+            }
+        )).await.unwrap();
+
+        let json_token = supabase_client.get_by_id("access_token", &id).await.unwrap();
+        assert_eq!(json_token["access_token"], "upsert_test");
+        assert_eq!(json_token["refresh_token"], "upsert_test");
+
+        supabase_client.upsert("access_token", &id, json!(
+            {
+                "access_token": "test_update",
+                "refresh_token": "test_update",
+                "expires_in": Utc::now().to_string()
+            }
+        )).await.unwrap();
+
+        let json_token = supabase_client.get_by_id("access_token", &id).await.unwrap();
+        assert_eq!(json_token["access_token"], "test_update");
+        assert_eq!(json_token["refresh_token"], "test_update");
+
+        supabase_client.delete("access_token", &id).await.unwrap();
+
+        let json_token = supabase_client.get_by_id("access_token", &id).await;
+        assert!(json_token.is_err());
+    }
+
 }
