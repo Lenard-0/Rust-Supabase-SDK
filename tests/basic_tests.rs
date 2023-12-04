@@ -1,6 +1,8 @@
 
 #[cfg(test)]
 mod tests {
+    use std::{thread::sleep, time::Duration};
+
     use chrono::Utc;
     use dotenv::dotenv;
     use serde_json::json;
@@ -95,4 +97,25 @@ mod tests {
         assert!(json_token.is_err());
     }
 
+    #[tokio::test]
+    async fn can_get_all() {
+        dotenv().ok(); // Load environment variables from .env file
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_KEY").unwrap(),
+        );
+        for _ in 0..200 {
+            supabase_client.create("testing", json!({})).await.unwrap();
+            sleep(Duration::from_millis(30));
+        }
+
+        let json = supabase_client.get_all("testing").await.unwrap();
+        assert_eq!(json.len(), 200);
+
+        // delete all items created for test
+        for item in json {
+            supabase_client.delete("testing", item["id"].as_str().unwrap()).await.unwrap();
+            sleep(Duration::from_millis(30));
+        }
+    }
 }

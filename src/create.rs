@@ -5,6 +5,7 @@ use crate::{SupabaseClient, generate_id};
 
 impl SupabaseClient {
     /// Creates a new record using UUID as the primary key (this is included inside this function)
+    /// Must use UUID as primary record
     /// Returns ID as String
     pub async fn create(&self, table_name: &str, mut body: serde_json::Value) -> Result<String, String> {
         let endpoint = format!("{}/rest/v1/{}", self.url, table_name);

@@ -28,6 +28,7 @@ impl SupabaseClient {
         }
     }
 
+    /// Creates or updates depending on whether the ID has been used before in this table
     pub async fn upsert(&self, table_name: &str, id: &str, mut body: serde_json::Value) -> Result<(), String> {
         let endpoint = format!("{}/rest/v1/{}", self.url, table_name);
         let client = reqwest::Client::new();
