@@ -82,7 +82,7 @@ impl Query {
 }
 
 impl SupabaseClient {
-    pub async fn search(
+    pub async fn select(
         &self,
         table_name: &str,
         search_column: &str,
