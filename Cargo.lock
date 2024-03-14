@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "rust_supabase_sdk"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "dotenv",
