@@ -5,7 +5,7 @@ pub mod get;
 pub mod delete;
 pub mod update;
 pub mod create;
-pub mod search;
+pub mod select;
 
 
 pub struct SupabaseClient {

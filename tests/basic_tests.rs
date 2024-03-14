@@ -118,4 +118,30 @@ mod tests {
             sleep(Duration::from_millis(30));
         }
     }
+
+    #[tokio::test]
+    async fn can_select() {
+        dotenv().ok(); // Load environment variables from .env file
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_KEY").unwrap(),
+        );
+        // for _ in 0..200 {
+        //     supabase_client.create("testing", json!({})).await.unwrap();
+        //     sleep(Duration::from_millis(30));
+        // }
+
+        let table_name = "contacts";
+        let query = "email=eq.mlaughlin@allen-vellone.com";
+
+
+        let json = supabase_client.select(table_name, query).await.unwrap();
+        assert_eq!(json.len() > 1, true);
+
+        // delete all items created for test
+        for item in json {
+            supabase_client.delete("testing", item["id"].as_str().unwrap()).await.unwrap();
+            sleep(Duration::from_millis(30));
+        }
+    }
 }

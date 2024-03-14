@@ -16,3 +16,4 @@ tokio = { version = "1", features = ["full"] }
 rand = "0.8.5"
 uuid = { version = "1.6.1", features = ["v4", "fast-rng", "macro-diagnostics"] }
 chrono = "0.4.31"
+urlencoding = "2.1.3"
