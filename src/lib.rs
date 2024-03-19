@@ -7,7 +7,7 @@ pub mod update;
 pub mod create;
 pub mod select;
 
-
+#[derive(Debug, Clone)]
 pub struct SupabaseClient {
     pub url: String,
     pub api_key: String,
