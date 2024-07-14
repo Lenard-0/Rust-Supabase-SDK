@@ -14,6 +14,7 @@ mod tests {
         SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
     }
 
@@ -24,6 +25,7 @@ mod tests {
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
         // generate random number to test update has worked
         let random_number = format!("{}", rand::random::<u32>());
@@ -43,9 +45,10 @@ mod tests {
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
         println!("{:?}", generate_id().len());
-        let id = supabase_client.create("access_token", json!(
+        let id = supabase_client.insert("access_token", json!(
             {
                 "access_token": "test",
                 "refresh_token": "test",
@@ -63,6 +66,7 @@ mod tests {
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
 
         let id = generate_id();
@@ -103,9 +107,10 @@ mod tests {
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
         for _ in 0..200 {
-            supabase_client.create("testing", json!({})).await.unwrap();
+            supabase_client.insert("testing", json!({})).await.unwrap();
             sleep(Duration::from_millis(30));
         }
 
@@ -125,6 +130,7 @@ mod tests {
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_KEY").unwrap(),
+            None
         );
         // for _ in 0..200 {
         //     supabase_client.create("testing", json!({})).await.unwrap();
