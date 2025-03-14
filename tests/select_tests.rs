@@ -58,7 +58,7 @@ mod tests {
         let records = supabase_client.select(table_name, select_query).await.unwrap();
         assert_eq!(records.len(), 30);
 
-        cleanup_records(&supabase_client, table_name, &records).await;
+        clean_up();
         let _ = supabase_client.delete(table_name, &diff_id).await;
     }
 
@@ -72,8 +72,8 @@ mod tests {
         );
         let table_name = "test_data";
 
-        let id1 = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Finance" })).await.unwrap();
-        let id2 = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Tech" })).await.unwrap();
+        let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Finance" })).await.unwrap();
+        let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Tech" })).await.unwrap();
 
         // Use DSL operators combined with & for an AND query.
         let filter = (query!("name" == "Org A") & query!("category" == "Tech")).to_filter_group();
@@ -83,8 +83,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["category"], "Tech");
 
-        cleanup_records(&supabase_client, table_name, &records).await;
-        let _ = supabase_client.delete(table_name, &id1).await;
+        clean_up();
     }
 
     #[tokio::test]
@@ -175,6 +174,7 @@ mod tests {
             assert_ne!(rec["name"].as_str().unwrap(), "Alice");
         }
         cleanup_records(&client, table, &records).await;
+        cleanup_records(&client, table, &vec![json!({ "id": id2, "id": id3 })]).await;
         let _ = client.delete(table, &id1).await;
     }
 
@@ -207,6 +207,10 @@ mod tests {
             assert!(score > 60);
         }
         cleanup_records(&client, table, &records).await;
+        cleanup_records(&client, table, &vec![
+            json!({ "id": id2 }),
+            json!({ "id": id3 }),
+            ]).await;
         let _ = client.delete(table, &id1).await;
     }
 
@@ -239,6 +243,10 @@ mod tests {
             assert!(score < 25);
         }
         cleanup_records(&client, table, &records).await;
+        cleanup_records(&client, table, &vec![
+            json!({ "id": id1 }),
+            json!({ "id": id2 }),
+            ]).await;
         let _ = client.delete(table, &id3).await;
     }
 
@@ -284,6 +292,11 @@ mod tests {
             assert!(name.starts_with("Alph"));
         }
         cleanup_records(&client, table, &records).await;
+        cleanup_records(&client, &table, &vec![
+            json!({ "id": id1 }),
+            json!({ "id": id2 }),
+            json!({ "id": id3 }),
+            ]).await;
         let _ = client.delete(table, &id2).await;
     }
 }
