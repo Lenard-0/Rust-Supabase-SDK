@@ -1,12 +1,9 @@
 
 #[cfg(test)]
 mod tests {
-    use std::{thread::sleep, time::Duration};
-
-    use chrono::Utc;
     use dotenv::dotenv;
     use serde_json::json;
-    use rust_supabase_sdk::{SupabaseClient, generate_id};
+    use rust_supabase_sdk::SupabaseClient;
 
     #[tokio::test]
     async fn can_initialise_supabase_client() {
@@ -73,31 +70,4 @@ mod tests {
 
         supabase_client.delete("organisations", &record_id).await.unwrap();
     }
-
-    // #[tokio::test]
-    // async fn can_select() {
-    //     dotenv().ok(); // Load environment variables from .env file
-    //     let supabase_client = SupabaseClient::new(
-    //         std::env::var("SUPABASE_URL").unwrap(),
-    //         std::env::var("SUPABASE_KEY").unwrap(),
-    //         None
-    //     );
-    //     // for _ in 0..200 {
-    //     //     supabase_client.create("testing", json!({})).await.unwrap();
-    //     //     sleep(Duration::from_millis(30));
-    //     // }
-
-    //     let table_name = "contacts";
-    //     let query = "email=eq.mlaughlin@allen-vellone.com";
-
-
-    //     let json = supabase_client.select(table_name, query).await.unwrap();
-    //     assert_eq!(json.len() > 1, true);
-
-    //     // delete all items created for test
-    //     for item in json {
-    //         supabase_client.delete("testing", item["id"].as_str().unwrap()).await.unwrap();
-    //         sleep(Duration::from_millis(30));
-    //     }
-    // }
 }
