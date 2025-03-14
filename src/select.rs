@@ -185,6 +185,11 @@ impl SelectQuery {
         }
         parts.join("&")
     }
+
+    pub fn sort(mut self, column: &str, direction: SortDirection) -> Self {
+        self.sorts.push(Sort::new(column, direction));
+        self
+    }
 }
 
 impl SupabaseClient {
@@ -304,6 +309,14 @@ pub enum Query {
 }
 
 impl Query {
+    pub fn to_query(&self) -> SelectQuery {
+        let filter_group = self.to_filter_group();
+        SelectQuery {
+            filter: Some(filter_group),
+            sorts: Vec::new(),
+        }
+    }
+
     /// Convert a Query tree into a FilterGroup.
     pub fn to_filter_group(&self) -> FilterGroup {
         match self {

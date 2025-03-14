@@ -20,9 +20,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn clean_up() {
-        dotenv().ok();
+    async fn clean_all() {
         let supabase_client = SupabaseClient::new(
             env::var("SUPABASE_URL").unwrap(),
             env::var("SUPABASE_API_KEY").unwrap(),
@@ -31,6 +29,12 @@ mod tests {
         let table_name = "test_data";
         let records = supabase_client.select(table_name, SelectQuery::new()).await.unwrap();
         cleanup_records(&supabase_client, table_name, &records).await;
+    }
+
+    #[tokio::test]
+    async fn clean_up() {
+        dotenv().ok();
+        clean_all().await;
     }
 
     #[tokio::test]
@@ -51,14 +55,13 @@ mod tests {
         // Insert one record with a different name.
         let diff_id = supabase_client.insert(table_name, json!({ "name": "Different Organisation" })).await.unwrap();
 
-        // Build a DSL query using our operators via the q! macro.
-        let filter = query!("name" == "Test Organisation").to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-
-        let records = supabase_client.select(table_name, select_query).await.unwrap();
+        let records = supabase_client.select(
+            table_name,
+            query!("name" == "Test Organisation").to_query()
+        ).await.unwrap();
         assert_eq!(records.len(), 30);
 
-        clean_up();
+        clean_all().await;
         let _ = supabase_client.delete(table_name, &diff_id).await;
     }
 
@@ -75,15 +78,14 @@ mod tests {
         let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Finance" })).await.unwrap();
         let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Tech" })).await.unwrap();
 
-        // Use DSL operators combined with & for an AND query.
-        let filter = (query!("name" == "Org A") & query!("category" == "Tech")).to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-
-        let records = supabase_client.select(table_name, select_query).await.unwrap();
+        let records = supabase_client.select(
+            table_name,
+            (query!("name" == "Org A") & query!("category" == "Tech")).to_query()
+        ).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["category"], "Tech");
 
-        clean_up();
+        clean_all().await;
     }
 
     #[tokio::test]
@@ -99,11 +101,10 @@ mod tests {
         let id_x = supabase_client.insert(table_name, json!({ "name": "Org X" })).await.unwrap();
         let id_z = supabase_client.insert(table_name, json!({ "name": "Org Z" })).await.unwrap();
 
-        // Use DSL operators combined with | for an OR query.
-        let filter = (query!("name" == "Org X") | query!("name" == "Org Z")).to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-
-        let records = supabase_client.select(table_name, select_query).await.unwrap();
+        let records = supabase_client.select(
+            table_name,
+            (query!("name" == "Org X") | query!("name" == "Org Z")).to_query()
+        ).await.unwrap();
         assert_eq!(records.len(), 2);
 
         // check IDs
@@ -111,7 +112,7 @@ mod tests {
         assert!(ids.contains(&id_x.as_str()));
         assert!(ids.contains(&id_z.as_str()));
 
-        cleanup_records(&supabase_client, table_name, &records).await;
+        clean_all().await;
     }
 
     #[tokio::test]
@@ -143,7 +144,7 @@ mod tests {
 
         assert_eq!(asc_dates.iter().rev().cloned().collect::<Vec<&str>>(), desc_dates);
 
-        cleanup_records(&supabase_client, table_name, &asc_records).await;
+        clean_all().await;
     }
 
     /// Test the not equal operator (using !=).
@@ -158,9 +159,9 @@ mod tests {
         let table = "test_data";
 
         // Insert three records with different names.
-        let id1 = client.insert(table, json!({ "name": "Alice" })).await.unwrap();
-        let id2 = client.insert(table, json!({ "name": "Bob" })).await.unwrap();
-        let id3 = client.insert(table, json!({ "name": "Charlie" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Alice" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Bob" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Charlie" })).await.unwrap();
         sleep(Duration::from_millis(30)).await;
 
         // Build a DSL query: select records where name != "Alice"
@@ -173,9 +174,7 @@ mod tests {
         for rec in &records {
             assert_ne!(rec["name"].as_str().unwrap(), "Alice");
         }
-        cleanup_records(&client, table, &records).await;
-        cleanup_records(&client, table, &vec![json!({ "id": id2, "id": id3 })]).await;
-        let _ = client.delete(table, &id1).await;
+        clean_all().await;
     }
 
     /// Test the greater than operator (using >).
@@ -190,9 +189,9 @@ mod tests {
         let table = "test_data";
 
         // Insert records with a numeric "score" field.
-        let id1 = client.insert(table, json!({ "name": "Item1", "score": 50 })).await.unwrap();
-        let id2 = client.insert(table, json!({ "name": "Item2", "score": 75 })).await.unwrap();
-        let id3 = client.insert(table, json!({ "name": "Item3", "score": 100 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item1", "score": 50 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item2", "score": 75 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item3", "score": 100 })).await.unwrap();
         sleep(Duration::from_millis(30)).await;
 
         // Build a DSL query: select records where score > 60.
@@ -206,12 +205,7 @@ mod tests {
             let score = rec["score"].as_i64().unwrap();
             assert!(score > 60);
         }
-        cleanup_records(&client, table, &records).await;
-        cleanup_records(&client, table, &vec![
-            json!({ "id": id2 }),
-            json!({ "id": id3 }),
-            ]).await;
-        let _ = client.delete(table, &id1).await;
+        clean_all().await;
     }
 
     /// Test the less than operator (using <).
@@ -226,9 +220,9 @@ mod tests {
         let table = "test_data";
 
         // Insert records with a numeric "score" field.
-        let id1 = client.insert(table, json!({ "name": "Item1", "score": 10 })).await.unwrap();
-        let id2 = client.insert(table, json!({ "name": "Item2", "score": 20 })).await.unwrap();
-        let id3 = client.insert(table, json!({ "name": "Item3", "score": 30 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item1", "score": 10 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item2", "score": 20 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item3", "score": 30 })).await.unwrap();
         sleep(Duration::from_millis(30)).await;
 
         // Build a DSL query: select records where score < 25.
@@ -242,12 +236,7 @@ mod tests {
             let score = rec["score"].as_i64().unwrap();
             assert!(score < 25);
         }
-        cleanup_records(&client, table, &records).await;
-        cleanup_records(&client, table, &vec![
-            json!({ "id": id1 }),
-            json!({ "id": id2 }),
-            ]).await;
-        let _ = client.delete(table, &id3).await;
+        clean_all().await;
     }
 
     /// Test the like operator.
@@ -265,9 +254,9 @@ mod tests {
         let table = "test_data";
 
         // Insert records with names that follow a pattern.
-        let id1 = client.insert(table, json!({ "name": "Alpha" })).await.unwrap();
-        let id2 = client.insert(table, json!({ "name": "Beta" })).await.unwrap();
-        let id3 = client.insert(table, json!({ "name": "Alphabet" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Alpha" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Beta" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Alphabet" })).await.unwrap();
         sleep(Duration::from_millis(30)).await;
 
         // Build a DSL query: select records where name is like "Alph%"
@@ -291,12 +280,37 @@ mod tests {
             let name = rec["name"].as_str().unwrap();
             assert!(name.starts_with("Alph"));
         }
-        cleanup_records(&client, table, &records).await;
-        cleanup_records(&client, &table, &vec![
-            json!({ "id": id1 }),
-            json!({ "id": id2 }),
-            json!({ "id": id3 }),
-            ]).await;
-        let _ = client.delete(table, &id2).await;
+        clean_all().await;
+    }
+
+    // Test combining filter and sort
+    #[tokio::test]
+    async fn test_filter_and_sort() {
+        dotenv().ok();
+        let client = SupabaseClient::new(
+            env::var("SUPABASE_URL").unwrap(),
+            env::var("SUPABASE_API_KEY").unwrap(),
+            None,
+        );
+        let table = "test_data";
+
+        // Insert records with a numeric "score" field.
+        let _ = client.insert(table, json!({ "name": "Item1", "score": 10 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item2", "score": 20 })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Item3", "score": 30 })).await.unwrap();
+        sleep(Duration::from_millis(30)).await;
+
+        let records = client.select(
+            table,
+            query!("score" < 25)
+                .to_query()
+                .sort("score", SortDirection::Desc)
+        ).await.unwrap();
+
+        // Expect items with score 20 and 10, in descending order.
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["score"].as_i64().unwrap(), 20);
+        assert_eq!(records[1]["score"].as_i64().unwrap(), 10);
+        clean_all().await;
     }
 }
