@@ -19,7 +19,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn can_create_get_and_remove() {
+    async fn can_create_get_update_and_remove() {
         dotenv().ok(); // Load environment variables from .env file
         let supabase_client = SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
@@ -34,117 +34,45 @@ mod tests {
         let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
         assert_eq!(record["name"], "Test Organisation");
 
+        supabase_client.update("organisations", &record_id, json!({
+            "name": "Updated Organisation"
+        })).await.unwrap();
+
+        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
+        assert_eq!(record["name"], "Updated Organisation");
+
         supabase_client.delete("organisations", &record_id).await.unwrap();
 
         let record = supabase_client.get_by_id("organisations", &record_id).await;
         assert!(record.is_err());
     }
 
-    // #[tokio::test]
-    // async fn can_update_and_get() {
-    //     dotenv().ok(); // Load environment variables from .env file
+    #[tokio::test]
+    async fn can_upsert() {
+        dotenv().ok(); // Load environment variables from .env file
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_API_KEY").unwrap(),
+            None
+        );
 
-    //     let supabase_client = SupabaseClient::new(
-    //         std::env::var("SUPABASE_URL").unwrap(),
-    //         std::env::var("SUPABASE_KEY").unwrap(),
-    //         None
-    //     );
-    //     // generate random number to test update has worked
-    //     let random_number = format!("{}", rand::random::<u32>());
-    //     let body = json!(
-    //         {
-    //             "access_token": random_number,
-    //         }
-    //     );
-    //     supabase_client.update("access_token", "b488536a-8935-4aa7-b283-8fa1289b2c15", body).await.unwrap();
-    //     let json_token = supabase_client.get_by_id("access_token", "b488536a-8935-4aa7-b283-8fa1289b2c15").await.unwrap();
-    //     assert_eq!(json_token["access_token"], random_number);
-    // }
+        let record_id = supabase_client.upsert("organisations", json!({
+            "name": "Test Organisation"
+        })).await.unwrap();
 
-    // #[tokio::test]
-    // async fn can_create() {
-    //     dotenv().ok(); // Load environment variables from .env file
-    //     let supabase_client = SupabaseClient::new(
-    //         std::env::var("SUPABASE_URL").unwrap(),
-    //         std::env::var("SUPABASE_KEY").unwrap(),
-    //         None
-    //     );
-    //     println!("{:?}", generate_id().len());
-    //     let id = supabase_client.insert("access_token", json!(
-    //         {
-    //             "access_token": "test",
-    //             "refresh_token": "test",
-    //             "expires_in": Utc::now().to_string()
-    //         }
-    //     )).await.unwrap();
-    //     let json_token = supabase_client.get_by_id("access_token", &id).await.unwrap();
-    //     assert_eq!(json_token["access_token"], "test");
-    //     assert_eq!(json_token["refresh_token"], "test");
-    // }
+        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
+        assert_eq!(record["name"], "Test Organisation");
 
-    // #[tokio::test]
-    // async fn can_upsert_and_delete() {
-    //     dotenv().ok(); // Load environment variables from .env file
-    //     let supabase_client = SupabaseClient::new(
-    //         std::env::var("SUPABASE_URL").unwrap(),
-    //         std::env::var("SUPABASE_KEY").unwrap(),
-    //         None
-    //     );
+        supabase_client.upsert("organisations", json!({
+            "id": record_id,
+            "name": "Updated Organisation"
+        })).await.unwrap();
 
-    //     let id = generate_id();
+        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
+        assert_eq!(record["name"], "Updated Organisation");
 
-    //     supabase_client.upsert("access_token", &id, json!(
-    //         {
-    //             "access_token": "upsert_test",
-    //             "refresh_token": "upsert_test",
-    //             "expires_in": Utc::now().to_string()
-    //         }
-    //     )).await.unwrap();
-
-    //     let json_token = supabase_client.get_by_id("access_token", &id).await.unwrap();
-    //     assert_eq!(json_token["access_token"], "upsert_test");
-    //     assert_eq!(json_token["refresh_token"], "upsert_test");
-
-    //     supabase_client.upsert("access_token", &id, json!(
-    //         {
-    //             "access_token": "test_update",
-    //             "refresh_token": "test_update",
-    //             "expires_in": Utc::now().to_string()
-    //         }
-    //     )).await.unwrap();
-
-    //     let json_token = supabase_client.get_by_id("access_token", &id).await.unwrap();
-    //     assert_eq!(json_token["access_token"], "test_update");
-    //     assert_eq!(json_token["refresh_token"], "test_update");
-
-    //     supabase_client.delete("access_token", &id).await.unwrap();
-
-    //     let json_token = supabase_client.get_by_id("access_token", &id).await;
-    //     assert!(json_token.is_err());
-    // }
-
-    // #[tokio::test]
-    // async fn can_get_all() {
-    //     dotenv().ok(); // Load environment variables from .env file
-    //     let supabase_client = SupabaseClient::new(
-    //         std::env::var("SUPABASE_URL").unwrap(),
-    //         std::env::var("SUPABASE_KEY").unwrap(),
-    //         None
-    //     );
-    //     for _ in 0..200 {
-    //         supabase_client.insert("testing", json!({})).await.unwrap();
-    //         sleep(Duration::from_millis(30));
-    //     }
-
-    //     let json = supabase_client.get_all("testing").await.unwrap();
-    //     assert_eq!(json.len(), 200);
-
-    //     // delete all items created for test
-    //     for item in json {
-    //         supabase_client.delete("testing", item["id"].as_str().unwrap()).await.unwrap();
-    //         sleep(Duration::from_millis(30));
-    //     }
-    // }
+        supabase_client.delete("organisations", &record_id).await.unwrap();
+    }
 
     // #[tokio::test]
     // async fn can_select() {

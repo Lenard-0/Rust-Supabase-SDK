@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::SupabaseClient;
+use crate::{generate_id, SupabaseClient};
 
 
 impl SupabaseClient {
@@ -29,7 +29,12 @@ impl SupabaseClient {
     }
 
     /// Creates or updates depending on whether the ID has been used before in this table
-    pub async fn upsert(&self, table_name: &str, id: &str, mut body: serde_json::Value) -> Result<(), String> {
+    pub async fn upsert(&self, table_name: &str, mut body: serde_json::Value) -> Result<String, String> {
+        let id = match body["id"].as_str() {
+            Some(id) => id.to_string(),
+            None => generate_id()
+        };
+
         let endpoint = format!("{}/rest/v1/{}", self.url, table_name);
         let client = reqwest::Client::new();
 
@@ -49,7 +54,7 @@ impl SupabaseClient {
             };
 
         if response.status().is_success() {
-            return Ok(())
+            return Ok(id)
         } else {
             return Err(response.status().to_string())
         }
