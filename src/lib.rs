@@ -5,6 +5,7 @@ pub mod delete;
 pub mod update;
 pub mod insert;
 pub mod select;
+pub mod universals;
 
 #[derive(Debug, Clone)]
 pub struct SupabaseClient {
