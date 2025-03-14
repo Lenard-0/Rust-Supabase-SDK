@@ -1,7 +1,50 @@
 use reqwest;
 use serde_json::Value;
-
 use crate::SupabaseClient;
+
+impl SupabaseClient {
+    pub async fn select(
+        &self,
+        table_name: &str,
+        query: &str
+    ) -> Result<Vec<Value>, String> {
+        let endpoint = format!("{}/rest/v1/{}", self.url, table_name);
+        let client = reqwest::Client::new();
+        //encode query
+        // Assuming `query` is in the format "key=value"
+        let query_params: Vec<(String, String)> = query.split('&').filter_map(|p| {
+            let mut parts = p.split('=');
+            match (parts.next(), parts.next()) {
+                (Some(key), Some(value)) =>
+                    Some((key.to_string(), value.to_string())),
+                _ => None,
+            }
+        }).collect();
+        //urlencoding::encode
+
+        let response: reqwest::Response = match client
+            .get(&endpoint)
+            .header("apikey", &self.api_key)
+            .header("Authorization", format!("Bearer {}", &self.api_key))
+            .header("Content-Type", "application/json")
+            .query(&(query_params.as_slice()))
+            .send()
+            .await {
+                Ok(response) => response,
+                Err(e) => return Err(e.to_string())
+            };
+
+        if response.status().is_success() {
+            let records: Result<Vec<Value>, reqwest::Error> = response.json().await;
+            match records {
+                Ok(data) => Ok(data),
+                Err(e) => Err(e.to_string())
+            }
+        } else {
+            Err(response.status().to_string())
+        }
+    }
+}
 
 // Enums for different types of operators and sort orders
 pub enum Operator {
@@ -78,49 +121,5 @@ impl Query {
         // Here we would implement the logic to convert the Query struct into a query string
         // For simplicity, this is just a placeholder
         "Generated query string".to_string()
-    }
-}
-
-impl SupabaseClient {
-    pub async fn select(
-        &self,
-        table_name: &str,
-        query: &str
-    ) -> Result<Vec<Value>, String> {
-        let endpoint = format!("{}/rest/v1/{}", self.url, table_name);
-        let client = reqwest::Client::new();
-        //encode query
-        // Assuming `query` is in the format "key=value"
-        let query_params: Vec<(String, String)> = query.split('&').filter_map(|p| {
-            let mut parts = p.split('=');
-            match (parts.next(), parts.next()) {
-                (Some(key), Some(value)) =>
-                    Some((key.to_string(), value.to_string())),
-                _ => None,
-            }
-        }).collect();
-        //urlencoding::encode
-
-        let response: reqwest::Response = match client
-            .get(&endpoint)
-            .header("apikey", &self.api_key)
-            .header("Authorization", format!("Bearer {}", &self.api_key))
-            .header("Content-Type", "application/json")
-            .query(&(query_params.as_slice()))
-            .send()
-            .await {
-                Ok(response) => response,
-                Err(e) => return Err(e.to_string())
-            };
-
-        if response.status().is_success() {
-            let records: Result<Vec<Value>, reqwest::Error> = response.json().await;
-            match records {
-                Ok(data) => Ok(data),
-                Err(e) => Err(e.to_string())
-            }
-        } else {
-            Err(response.status().to_string())
-        }
     }
 }
