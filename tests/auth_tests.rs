@@ -2,7 +2,7 @@
 #[cfg(test)]
 mod tests {
     use dotenv::dotenv;
-    use rust_supabase_sdk::SupabaseClient;
+    use rust_supabase_sdk::{auth::SignUpRequest, SupabaseClient};
 
     #[tokio::test]
     async fn can_create_user_and_sign_in() {
@@ -15,8 +15,14 @@ mod tests {
 
         let email = "test_user_system1@fakemail.com";
         let password = "password123";
-        let auth_response = supabase_client.sign_up(email, password).await.unwrap();
+        let auth_response = supabase_client.sign_up(SignUpRequest {
+            email: email.to_string(),
+            password: password.to_string(),
+            user_id: None,
+            name: Some("Test User".to_string())
+        }).await.unwrap();
         assert_eq!(auth_response.user["email"], email);
+        assert_eq!(auth_response.user["name"], "Test User");
         assert_eq!(auth_response.token_type, "bearer");
 
         let sign_in = supabase_client.sign_in(email, password).await.unwrap();

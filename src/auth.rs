@@ -1,5 +1,6 @@
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::SupabaseClient;
 
@@ -38,10 +39,10 @@ impl SupabaseClient {
     pub async fn sign_in(&self, email: &str, password: &str) -> Result<AuthResponse, Error> {
         let client = Client::new();
         let url = format!("{}/auth/v1/token?grant_type=password", self.url);
-        let request_body = SignUpRequest {
-            email: email.to_string(),
-            password: password.to_string(),
-        };
+        let request_body = json!( {
+            "email": email,
+            "password": password,
+        });
 
         let response = client
             .post(&url)
