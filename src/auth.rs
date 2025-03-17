@@ -5,8 +5,10 @@ use crate::SupabaseClient;
 
 #[derive(Serialize)]
 pub struct SignUpRequest {
-    email: String,
-    password: String,
+    pub email: String,
+    pub password: String,
+    pub user_id: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -17,19 +19,15 @@ pub struct AuthResponse {
 }
 
 impl SupabaseClient {
-    pub async fn sign_up(&self, email: &str, password: &str) -> Result<AuthResponse, Error> {
+    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse, Error> {
         let client = Client::new();
         let url = format!("{}/auth/v1/signup", self.url);
-        let request_body = SignUpRequest {
-            email: email.to_string(),
-            password: password.to_string(),
-        };
 
         let response = client
             .post(&url)
             .header("apikey", &self.api_key)
             .header("Content-Type", "application/json")
-            .json(&request_body)
+            .json(&sign_up_request)
             .send()
             .await?;
 
