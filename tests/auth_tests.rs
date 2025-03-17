@@ -1,0 +1,33 @@
+
+#[cfg(test)]
+mod tests {
+    use dotenv::dotenv;
+    use rust_supabase_sdk::SupabaseClient;
+
+    #[tokio::test]
+    async fn can_create_user_and_sign_in() {
+        dotenv().ok();
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_SERVICE_WORKER").unwrap(),
+            None
+        );
+
+        let email = "test_user_system1@fakemail.com";
+        let password = "password123";
+        let auth_response = supabase_client.sign_up(email, password).await.unwrap();
+        assert_eq!(auth_response.user["email"], email);
+        assert_eq!(auth_response.token_type, "bearer");
+
+        let sign_in = supabase_client.sign_in(email, password).await.unwrap();
+        assert_eq!(sign_in.user["email"], email);
+        assert_eq!(sign_in.token_type, "bearer");
+
+        let user_info = supabase_client.get_user(&sign_in.access_token).await.unwrap();
+        assert_eq!(user_info["email"], email);
+
+        // Clean up
+        // println!("Deleting user: {}", user_info);
+        // supabase_client.delete("auth.users", &user_info["id"].as_str().unwrap()).await.unwrap();
+    }
+}
