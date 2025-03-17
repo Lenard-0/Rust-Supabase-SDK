@@ -13,7 +13,7 @@ mod tests {
             None
         );
 
-        let email = "test_user_system1@fakemail.com";
+        let email = "test_user_system123@fakemail.com";
         let password = "password123";
         let auth_response = supabase_client.sign_up(SignUpRequest {
             email: email.to_string(),
@@ -21,6 +21,7 @@ mod tests {
             user_id: None,
             name: Some("Test User".to_string())
         }).await.unwrap();
+        println!("Auth response: {:#?}", auth_response.user);
         assert_eq!(auth_response.user["email"], email);
         assert_eq!(auth_response.user["name"], "Test User");
         assert_eq!(auth_response.token_type, "bearer");

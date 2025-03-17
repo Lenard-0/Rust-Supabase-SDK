@@ -15,6 +15,8 @@ pub struct SignUpRequest {
 #[derive(Deserialize)]
 pub struct AuthResponse {
     pub access_token: String,
+    pub expires_in: u64,
+    pub refresh_token: String,
     pub token_type: String,
     pub user: serde_json::Value,
 }
