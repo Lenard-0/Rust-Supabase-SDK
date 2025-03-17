@@ -2,7 +2,7 @@
 mod tests {
     use dotenv::dotenv;
     use rust_supabase_sdk::{
-        select::{Filter, FilterGroup, LogicalOperator, Operator, SelectQuery, Sort, SortDirection},
+        select::{Filter, FilterGroup, LogicalOperator, Operator, Query, SelectQuery, Sort, SortDirection},
         SupabaseClient
     };
     use serde_json::{json, Value};
@@ -57,7 +57,7 @@ mod tests {
 
         let records = supabase_client.select(
             table_name,
-            query!("name" == "Test Organisation").to_query()
+            query!("name" == "Test Organisation").to_query(),
         ).await.unwrap();
         assert_eq!(records.len(), 30);
 
@@ -78,9 +78,29 @@ mod tests {
         let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Finance" })).await.unwrap();
         let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Tech" })).await.unwrap();
 
+        let query = (query!("name" == "Org A") & query!("category" == "Tech")).to_query();
+        assert_eq!(query, SelectQuery {
+            filter: Some(FilterGroup {
+                operator: LogicalOperator::And,
+                filters: vec![
+                    Filter {
+                        column: "name".to_string(),
+                        operator: Operator::Eq,
+                        value: "Org A".to_string(),
+                    },
+                    Filter {
+                        column: "category".to_string(),
+                        operator: Operator::Eq,
+                        value: "Tech".to_string(),
+                    },
+                ],
+            }),
+            sorts: vec![],
+        });
+
         let records = supabase_client.select(
             table_name,
-            (query!("name" == "Org A") & query!("category" == "Tech")).to_query()
+            query,
         ).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["category"], "Tech");
@@ -101,9 +121,29 @@ mod tests {
         let id_x = supabase_client.insert(table_name, json!({ "name": "Org X" })).await.unwrap();
         let id_z = supabase_client.insert(table_name, json!({ "name": "Org Z" })).await.unwrap();
 
+        let query = (query!("name" == "Org X") | query!("name" == "Org Z")).to_query();
+        assert_eq!(query, SelectQuery {
+            filter: Some(FilterGroup {
+                operator: LogicalOperator::Or,
+                filters: vec![
+                    Filter {
+                        column: "name".to_string(),
+                        operator: Operator::Eq,
+                        value: "Org X".to_string(),
+                    },
+                    Filter {
+                        column: "name".to_string(),
+                        operator: Operator::Eq,
+                        value: "Org Z".to_string(),
+                    },
+                ],
+            }),
+            sorts: vec![],
+        });
+
         let records = supabase_client.select(
             table_name,
-            (query!("name" == "Org X") | query!("name" == "Org Z")).to_query()
+            query,
         ).await.unwrap();
         assert_eq!(records.len(), 2);
 
@@ -311,6 +351,28 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0]["score"].as_i64().unwrap(), 20);
         assert_eq!(records[1]["score"].as_i64().unwrap(), 10);
+        clean_all().await;
+    }
+
+    #[tokio::test]
+    async fn can_select_very_large_dataset() {
+        dotenv().ok();
+        let client = SupabaseClient::new(
+            env::var("SUPABASE_URL").unwrap(),
+            env::var("SUPABASE_API_KEY").unwrap(),
+            None,
+        );
+        let table = "test_data";
+
+        // create 1005 records
+        for i in 1..=1005 {
+            client.insert(table, json!({ "name": format!("Item {}", i) })).await.unwrap();
+            sleep(Duration::from_millis(30)).await;
+        }
+
+        let all_records = client.select(table, SelectQuery { filter: None, sorts: vec![] }).await.unwrap();
+        assert_eq!(all_records.len(), 1005);
+
         clean_all().await;
     }
 }
