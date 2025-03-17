@@ -13,7 +13,7 @@ mod tests {
             None
         );
 
-        let email = "test_user_system123@fakemail.com";
+        let email = "test_user_system1234@fakemail.com";
         let password = "password123";
         let auth_response = supabase_client.sign_up(SignUpRequest {
             email: email.to_string(),
