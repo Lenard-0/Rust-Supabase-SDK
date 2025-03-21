@@ -1,8 +1,9 @@
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
 use crate::SupabaseClient;
+
+pub mod recover;
 
 #[derive(Serialize)]
 pub struct SignUpRequest {

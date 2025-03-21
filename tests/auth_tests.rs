@@ -66,4 +66,32 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn can_do_forget_password() {
+        dotenv().ok();
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_SERVICE_WORKER").unwrap(),
+            None
+        );
+
+        let email = "telyqujo@dreamclarify.org";
+        supabase_client.forgot_password(email).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_do_reset_password() {
+        dotenv().ok();
+        let supabase_client = SupabaseClient::new(
+            std::env::var("SUPABASE_URL").unwrap(),
+            std::env::var("SUPABASE_SERVICE_WORKER").unwrap(),
+            None
+        );
+
+        let new_password = "password123";
+        let code = "798759";
+        let access_token = "eyJhbGciOiJIUzI1NiIsImtpZCI6IkN6VVk1VHBCYitJMXF2b1IiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3V5aHVkbW50eXF3ZGlibWZiZ3FxLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJhYmQyNzBiZC1kMjc2LTQ4ZDYtOWY4Yi1jZjJiMDM1M2Y4NzMiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzQyNTQxOTIwLCJpYXQiOjE3NDI1MzgzMjAsImVtYWlsIjoidGVseXF1am9AZHJlYW1jbGFyaWZ5Lm9yZyIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJ0ZWx5cXVqb0BkcmVhbWNsYXJpZnkub3JnIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZpcnN0X25hbWUiOiJmYWtlIiwiZnVsbF9uYW1lIjoiZmFrZSBmYWtlIiwibGFzdF9uYW1lIjoiZmFrZSIsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiYWJkMjcwYmQtZDI3Ni00OGQ2LTlmOGItY2YyYjAzNTNmODczIn0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoib3RwIiwidGltZXN0YW1wIjoxNzQyNTM4MzIwfV0sInNlc3Npb25faWQiOiIyZWNiYTlmNi1jZGVhLTQyNmItODViYS00MmZkMTgwYjVlNWMiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.07cbSN7lQMwVaHDZ3Hpg_yQ-UeWoVGGxtcizkt0mngE";
+        supabase_client.reset_password(new_password, access_token, code).await.unwrap();
+    }
 }
