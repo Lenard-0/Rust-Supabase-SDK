@@ -1,6 +1,6 @@
 use reqwest::{Client, Error};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::SupabaseClient;
 
@@ -22,19 +22,37 @@ pub struct AuthResponse {
 }
 
 impl SupabaseClient {
-    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse, Error> {
+    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse, String> {
         let client = Client::new();
         let url = format!("{}/auth/v1/signup", self.url);
 
-        let response = client
+        let response = match client
             .post(&url)
             .header("apikey", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&sign_up_request)
             .send()
-            .await?;
+            .await {
+            Ok(response) => response,
+            Err(err) => return Err(format!("Failed to send sign up request: {:?}", err).into()),
+        };
 
-        let auth_response = response.json::<AuthResponse>().await?;
+        let auth_response_json: Value = match response.json().await {
+            Ok(json) => json,
+            Err(err) => return Err(format!("Failed to parse sign up response: {:?}", err).into()),
+        };
+        println!("Auth response: {:#?}", auth_response_json);
+        match auth_response_json["error_code"].as_str() {
+            Some(_) => match auth_response_json["msg"].as_str() {
+                Some(msg) => return Err(msg.to_string()),
+                None => return Err("Failed to sign up without a supabase msg".into()),
+            },
+            _ => {}
+        };
+        let auth_response: AuthResponse = match serde_json::from_value(auth_response_json) {
+            Ok(auth_response) => auth_response,
+            Err(err) => return Err(format!("Failed to parse sign up response: {:?}", err).into()),
+        };
         Ok(auth_response)
     }
 

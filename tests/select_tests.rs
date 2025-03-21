@@ -6,6 +6,7 @@ mod tests {
         SupabaseClient
     };
     use serde_json::{json, Value};
+    use uuid::Uuid;
     use std::env;
     use tokio::time::{sleep, Duration};
     use rust_supabase_sdk::query;
@@ -104,6 +105,55 @@ mod tests {
         ).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["category"], "Tech");
+
+        clean_all().await;
+    }
+
+    #[tokio::test]
+    async fn test_and_query_with_uuids() {
+        dotenv().ok();
+        let supabase_client = SupabaseClient::new(
+            env::var("SUPABASE_URL").unwrap(),
+            env::var("SUPABASE_API_KEY").unwrap(),
+            None,
+        );
+        let table_name = "test_data";
+
+        let id1 = Uuid::new_v4().to_string();
+        let id2 = Uuid::new_v4().to_string();
+
+        let _ = supabase_client.insert(table_name, json!({ "id1": id1.clone(), "id2": id2.clone() })).await.unwrap();
+        let _ = supabase_client.insert(table_name, json!({ "id1": id1.clone(), "id2": id1.clone() })).await.unwrap();
+
+        let id1_clone = id1.clone();
+        let id2_clone = id2.clone();
+        let query = (query!("id1" == id1) & query!("id2" == id2)).to_query();
+        assert_eq!(query, SelectQuery {
+            filter: Some(FilterGroup {
+                operator: LogicalOperator::And,
+                filters: vec![
+                    Filter {
+                        column: "id1".to_string(),
+                        operator: Operator::Eq,
+                        value: id1_clone.to_string(),
+                    },
+                    Filter {
+                        column: "id2".to_string(),
+                        operator: Operator::Eq,
+                        value: id2_clone.to_string(),
+                    },
+                ],
+            }),
+            sorts: vec![],
+        });
+
+        let records = supabase_client.select(
+            table_name,
+            query,
+        ).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["id1"], id1_clone);
+        assert_eq!(records[0]["id2"], id2_clone);
 
         clean_all().await;
     }
@@ -354,6 +404,7 @@ mod tests {
         clean_all().await;
     }
 
+    // This test is dictated by the max rows setting in the Supabase instance.
     #[tokio::test]
     async fn can_select_very_large_dataset() {
         dotenv().ok();
@@ -374,5 +425,26 @@ mod tests {
         assert_eq!(all_records.len(), 1005);
 
         clean_all().await;
+    }
+
+    #[tokio::test]
+    async fn can_create_simple_filter_query() {
+        let lecture_id = "8e662d9e-c920-4d2f-bda7-09e5173cc494";
+        let user_id = lecture_id;
+        let filter = (query!("lecture_id" == lecture_id) & query!("user_id" == user_id)).to_filter_group();
+        assert_eq!(filter, FilterGroup {
+            operator: LogicalOperator::And,
+            filters: vec![Filter {
+                column: "lecture_id".to_string(),
+                operator: Operator::Eq,
+                value: lecture_id.to_string(),
+            }, Filter {
+                column: "user_id".to_string(),
+                operator: Operator::Eq,
+                value: user_id.to_string(),
+            }],
+        });
+
+        assert_eq!(filter.to_query_string(), "lecture_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494&user_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494");
     }
 }
