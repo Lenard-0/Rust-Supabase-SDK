@@ -2,7 +2,7 @@
 #[cfg(test)]
 mod tests {
     use dotenv::dotenv;
-    use rust_supabase_sdk::{auth::{self, SignUpRequest}, SupabaseClient};
+    use rust_supabase_sdk::{auth::{AuthErrorResponse, SignUpRequest}, SupabaseClient};
 
     #[tokio::test]
     async fn can_create_user_and_sign_in() {
@@ -57,8 +57,12 @@ mod tests {
 
         match auth_response {
             Ok(_) => panic!("User was created successfully"),
-            Err(e) => {
-                assert_eq!(e.to_string(), "User already registered");
+            Err(auth_error_response) => {
+                assert_eq!(auth_error_response, AuthErrorResponse {
+                    code: 422,
+                    msg: "User already registered".to_string(),
+                    error_code: "user_already_exists".to_string()
+                });
             }
         }
     }

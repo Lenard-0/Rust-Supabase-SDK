@@ -21,8 +21,25 @@ pub struct AuthResponse {
     pub user: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct AuthErrorResponse {
+    pub code: u32,
+    pub msg: String,
+    pub error_code: String,
+}
+
+impl AuthErrorResponse {
+    fn from_string(error: String) -> AuthErrorResponse {
+        AuthErrorResponse {
+            code: 0,
+            msg: error.clone(),
+            error_code: error
+        }
+    }
+}
+
 impl SupabaseClient {
-    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse, String> {
+    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse, AuthErrorResponse> {
         let client = Client::new();
         let url = format!("{}/auth/v1/signup", self.url);
 
@@ -34,24 +51,27 @@ impl SupabaseClient {
             .send()
             .await {
             Ok(response) => response,
-            Err(err) => return Err(format!("Failed to send sign up request: {:?}", err).into()),
+            Err(err) => return Err(AuthErrorResponse::from_string(format!("Failed to send sign up request: {:?}", err).into())),
         };
 
         let auth_response_json: Value = match response.json().await {
             Ok(json) => json,
-            Err(err) => return Err(format!("Failed to parse sign up response: {:?}", err).into()),
+            Err(err) => return Err(AuthErrorResponse::from_string(format!("Failed to parse sign up response: {:?}", err).into())),
         };
         println!("Auth response: {:#?}", auth_response_json);
         match auth_response_json["error_code"].as_str() {
-            Some(_) => match auth_response_json["msg"].as_str() {
-                Some(msg) => return Err(msg.to_string()),
-                None => return Err("Failed to sign up without a supabase msg".into()),
-            },
+            Some(_) => {
+                let auth_error_response: AuthErrorResponse = match serde_json::from_value(auth_response_json) {
+                    Ok(auth_error_response) => auth_error_response,
+                    Err(err) => return Err(AuthErrorResponse::from_string(format!("Failed to parse sign up error response: {:?}", err).into())),
+                };
+                return Err(auth_error_response)
+            }
             _ => {}
         };
         let auth_response: AuthResponse = match serde_json::from_value(auth_response_json) {
             Ok(auth_response) => auth_response,
-            Err(err) => return Err(format!("Failed to parse sign up response: {:?}", err).into()),
+            Err(err) => return Err(AuthErrorResponse::from_string(format!("Failed to parse sign up response: {:?}", err).into())),
         };
         Ok(auth_response)
     }

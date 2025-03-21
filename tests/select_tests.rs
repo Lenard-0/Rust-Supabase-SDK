@@ -2,7 +2,7 @@
 mod tests {
     use dotenv::dotenv;
     use rust_supabase_sdk::{
-        select::{Filter, FilterGroup, LogicalOperator, Operator, Query, SelectQuery, Sort, SortDirection},
+        select::{Filter, FilterGroup, LogicalOperator, Operator, SelectQuery, Sort, SortDirection},
         SupabaseClient
     };
     use serde_json::{json, Value};
