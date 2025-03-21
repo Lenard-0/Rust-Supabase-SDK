@@ -12,7 +12,7 @@ pub struct SignUpRequest {
     pub name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct AuthResponse {
     pub access_token: String,
     pub expires_in: u64,
