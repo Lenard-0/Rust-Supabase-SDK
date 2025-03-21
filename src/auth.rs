@@ -29,7 +29,7 @@ pub struct AuthErrorResponse {
 }
 
 impl AuthErrorResponse {
-    fn from_string(error: String) -> AuthErrorResponse {
+    pub fn from_string(error: String) -> AuthErrorResponse {
         AuthErrorResponse {
             code: 0,
             msg: error.clone(),

@@ -1,6 +1,6 @@
 [package]
 name = "rust_supabase_sdk"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "An SDK kit for SupaBase so that Rust lovers can use SupaBase with the low level abstracted away. If you want new features tell me and I'll add them."
 license = "MIT"
