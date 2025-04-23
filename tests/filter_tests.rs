@@ -13,7 +13,7 @@ mod tests {
         let filter1 = Filter::new("name", Operator::Eq, "Test Organisation");
         let filter2 = Filter::new("id", Operator::Eq, "123");
         let group = FilterGroup::new(LogicalOperator::Or, vec![filter1, filter2]);
-        assert_eq!(group.to_query_string(), "or=(name=eq.Test%20Organisation,id=eq.123)");
+        assert_eq!(group.to_query_string(), "or=(name.eq.Test%20Organisation,id.eq.123)");
     }
 
     #[test]
