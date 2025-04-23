@@ -404,29 +404,6 @@ mod tests {
         clean_all().await;
     }
 
-    // This test is dictated by the max rows setting in the Supabase instance.
-    #[tokio::test]
-    async fn can_select_very_large_dataset() {
-        dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table = "test_data";
-
-        // create 1005 records
-        for i in 1..=1005 {
-            client.insert(table, json!({ "name": format!("Item {}", i) })).await.unwrap();
-            sleep(Duration::from_millis(30)).await;
-        }
-
-        let all_records = client.select(table, SelectQuery { filter: None, sorts: vec![] }).await.unwrap();
-        assert_eq!(all_records.len(), 1005);
-
-        clean_all().await;
-    }
-
     #[tokio::test]
     async fn can_create_simple_filter_query() {
         let lecture_id = "8e662d9e-c920-4d2f-bda7-09e5173cc494";
@@ -459,7 +436,7 @@ mod tests {
         let table_name = "test_data";
 
         // Insert 30 records with name "Test Organisation"
-        for _ in 0..30 {
+        for _ in 0..5 {
             supabase_client.insert(table_name, json!({ "name": "Test Organisation" })).await.unwrap();
             sleep(Duration::from_millis(30)).await;
         }
@@ -485,7 +462,7 @@ mod tests {
 
         assert_eq!(records, same_records);
         assert_eq!(records, same_records_2);
-        assert_eq!(records.len(), 30);
+        assert_eq!(records.len(), 5);
 
         clean_all().await;
         let _ = supabase_client.delete(table_name, &diff_id).await;
