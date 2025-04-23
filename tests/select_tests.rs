@@ -447,4 +447,47 @@ mod tests {
 
         assert_eq!(filter.to_query_string(), "lecture_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494&user_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494");
     }
+
+    #[tokio::test]
+    async fn can_use_expression_in_query_eq_macro() {
+        dotenv().ok();
+        let supabase_client = SupabaseClient::new(
+            env::var("SUPABASE_URL").unwrap(),
+            env::var("SUPABASE_API_KEY").unwrap(),
+            None,
+        );
+        let table_name = "test_data";
+
+        // Insert 30 records with name "Test Organisation"
+        for _ in 0..30 {
+            supabase_client.insert(table_name, json!({ "name": "Test Organisation" })).await.unwrap();
+            sleep(Duration::from_millis(30)).await;
+        }
+        let query_name_varible = "Test Organisation".to_string();
+        let first_half = "Test".to_string();
+        let second_half = "Organisation".to_string();
+        // Insert one record with a different name.
+        let diff_id = supabase_client.insert(table_name, json!({ "name": "Different Organisation" })).await.unwrap();
+        let records = supabase_client.select(
+            table_name,
+            query!("name" == query_name_varible.clone()).to_query(),
+        ).await.unwrap();
+
+        let same_records = supabase_client.select(
+            table_name,
+            query!("name" == format!("{} {}", first_half, second_half)).to_query(),
+        ).await.unwrap();
+
+        let same_records_2 = supabase_client.select(
+            table_name,
+            query!("name" == &query_name_varible).to_query(),
+        ).await.unwrap();
+
+        assert_eq!(records, same_records);
+        assert_eq!(records, same_records_2);
+        assert_eq!(records.len(), 30);
+
+        clean_all().await;
+        let _ = supabase_client.delete(table_name, &diff_id).await;
+    }
 }

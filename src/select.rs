@@ -354,22 +354,22 @@ impl BitOr for Query {
 ///     let expr = q!("name" == "Org X") | q!("category" != "Finance") & q!("property" > 5);
 #[macro_export]
 macro_rules! query {
-    ($col:tt == $val:tt) => {
+    ($col:tt == $val:expr) => {
         $crate::select::Field::new($col).eq($val)
     };
-    ($col:tt != $val:tt) => {
+    ($col:tt != $val:expr) => {
         $crate::select::Field::new($col).neq($val)
     };
-    ($col:tt > $val:tt) => {
+    ($col:tt > $val:expr) => {
         $crate::select::Field::new($col).gt($val)
     };
-    ($col:tt < $val:tt) => {
+    ($col:tt < $val:expr) => {
         $crate::select::Field::new($col).lt($val)
     };
-    ($col:tt >= $val:tt) => {
+    ($col:tt >= $val:expr) => {
         $crate::select::Field::new($col).gte($val)
     };
-    ($col:tt <= $val:tt) => {
+    ($col:tt <= $val:expr) => {
         $crate::select::Field::new($col).lte($val)
     };
     // Support grouping with & (AND)
@@ -385,3 +385,4 @@ macro_rules! query {
         $crate::select::q!($($inner)+)
     };
 }
+
