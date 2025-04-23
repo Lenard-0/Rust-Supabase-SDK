@@ -10,7 +10,7 @@ mod tests {
         dotenv().ok(); // Load environment variables from .env file
         SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
-            std::env::var("SUPABASE_KEY").unwrap(),
+            std::env::var("SUPABASE_API_KEY").unwrap(),
             None
         );
     }
