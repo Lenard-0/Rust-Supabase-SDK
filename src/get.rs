@@ -6,7 +6,7 @@ impl SupabaseClient {
     pub async fn get_by_id(&self, table_name: &str, id: &str) -> Result<serde_json::Value, String> {
         let result = self.request(
             &format!("/rest/v1/{table_name}?id=eq.{id}"),
-            &HttpMethod::Get,
+            HttpMethod::Get,
             None,
             false
         ).await?;

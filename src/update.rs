@@ -7,7 +7,7 @@ impl SupabaseClient {
     /// Patch updates any fields you include in the body
     pub async fn update(&self, table_name: &str, id: &str, body: serde_json::Value) -> Result<(), String> {self.request(
             &format!("/rest/v1/{table_name}?id=eq.{id}"),
-            &HttpMethod::Patch,
+            HttpMethod::Patch,
             Some(body),
             false
         ).await?;
@@ -25,7 +25,7 @@ impl SupabaseClient {
 
         self.request(
             &format!("/rest/v1/{table_name}"),
-            &HttpMethod::Post,
+            HttpMethod::Post,
             Some(body),
             true
         ).await?;

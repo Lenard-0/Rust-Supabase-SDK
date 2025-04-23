@@ -16,7 +16,7 @@ impl SupabaseClient {
 
         self.request(
         &format!("/rest/v1/{table_name}"),
-        &HttpMethod::Post,
+        HttpMethod::Post,
         Some(body),
             false
         ).await?;

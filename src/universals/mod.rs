@@ -1,4 +1,6 @@
-use reqwest::Client;
+use std::time::Duration;
+
+use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use crate::SupabaseClient;
 
@@ -12,61 +14,71 @@ pub enum HttpMethod {
     Delete,
 }
 
-
 impl SupabaseClient {
     pub async fn request(
         &self,
         path: &str,
-        method: &HttpMethod,
+        method: HttpMethod,
         payload: Option<Value>,
-        upsert: bool
+        upsert: bool,
     ) -> Result<Value, String> {
-        let mut reqwest_builder = match method {
-            HttpMethod::Get => Client::new().get(self.url.clone() + path),
-            HttpMethod::Post => Client::new().post(self.url.clone() + path),
-            HttpMethod::Put => Client::new().put(self.url.clone() + path),
-            HttpMethod::Patch => Client::new().patch(self.url.clone() + path),
-            HttpMethod::Delete => Client::new().delete(self.url.clone() + path),
-        };
+        let client = Client::new();
+        let max_retries = 5;
 
-        reqwest_builder = reqwest_builder.bearer_auth(&self.api_key);
-        reqwest_builder = reqwest_builder.header("apikey", &self.api_key);
+        for attempt in 0..=max_retries {
+            let req_url = format!("{}{}", self.url, path);
+            let mut req = match method {
+                HttpMethod::Get => client.get(&req_url),
+                HttpMethod::Post => client.post(&req_url),
+                HttpMethod::Put => client.put(&req_url),
+                HttpMethod::Patch => client.patch(&req_url),
+                HttpMethod::Delete => client.delete(&req_url),
+            }
+            .bearer_auth(&self.api_key)
+            .header("apikey", &self.api_key);
 
-        if upsert {
-            reqwest_builder = reqwest_builder.header("Prefer", "resolution=merge-duplicates");
+            if upsert {
+                req = req.header("Prefer", "resolution=merge-duplicates");
+            }
+
+            if let Some(ref data) = payload {
+                req = req.json(data);
+            }
+
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+
+                    if status == StatusCode::TOO_MANY_REQUESTS && attempt < max_retries {
+                        tokio::time::sleep(Duration::from_millis(50 * 2_u64.pow(attempt))).await;
+                        continue;
+                    }
+
+                    if !status.is_success() {
+                        let body = resp.text().await.unwrap_or_else(|_| "".into());
+                        return Err(format!(
+                            "HTTP error {} on path {}\nPayload: {:#?}\nBody: {}",
+                            status, path, payload, body
+                        ));
+                    }
+
+                    let text = resp
+                        .text()
+                        .await
+                        .map_err(|e| format!("Failed to read response: {:?}", e))?;
+
+                    return if text.is_empty() {
+                        Ok(Value::Null)
+                    } else {
+                        serde_json::from_str(&text)
+                            .map_err(|e| format!("JSON parse error: {:?}", e))
+                    };
+                }
+
+                Err(e) => return Err(format!("Request error: {:?}", e)),
+            }
         }
 
-        let response = reqwest_builder
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|err| format!("Error sending request: {:#?}", err))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let response_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read response body".to_string());
-
-            return Err(format!(
-                "Error: received status code {}\npath: {}\npayload: {:#?}\nresponse body: {}",
-                status, path, payload, response_text
-            ))
-        }
-
-        let result_str = response
-            .text()
-            .await
-            .map_err(|err| format!("Error reading response body: {:#?}", err))?;
-
-        if result_str.is_empty() {
-            return Ok(Value::Null);
-        }
-
-        return match result_str.parse::<Value>() {
-            Ok(value) => Ok(value),
-            Err(err) => Err(format!("Error converting response to JSON: {:#?}", err)),
-        }
+        Err("Exceeded max retries".into())
     }
 }
