@@ -1,13 +1,13 @@
 use reqwest::Client;
 use serde::Deserialize;
-
 use crate::SupabaseClient;
 
 
 #[derive(Debug, Deserialize)]
 pub struct SupabaseUser {
     pub id: String,
-    pub email: Option<String>,
+    pub email: String,
+    pub name: Option<String>,
     pub created_at: i64,
 }
 
