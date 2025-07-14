@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use crate::SupabaseClient;
 
 pub mod recover;
+pub mod users;
 
 #[derive(Serialize)]
 pub struct SignUpRequest {
