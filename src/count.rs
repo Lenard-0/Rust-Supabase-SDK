@@ -8,13 +8,8 @@ impl SupabaseClient {
         let mut url = Url::parse(&format!("{}/rest/v1/{}", self.url, table_name))
             .map_err(|e| e.to_string())?;
 
-        // Convert existing query to string and add count=exact
-        let mut query_string = query.to_query_string();
-        if !query_string.is_empty() {
-            query_string.push('&');
-        }
-        query_string.push_str("count=exact");
-
+        // Keep original query string (just filters and sorts)
+        let query_string = query.to_query_string();
         url.set_query(Some(&query_string));
 
         let client = Client::new();
@@ -22,18 +17,19 @@ impl SupabaseClient {
             .get(url)
             .header("apikey", HeaderValue::from_str(&self.api_key).map_err(|e| e.to_string())?)
             .header("Authorization", format!("Bearer {}", &self.api_key))
+            .header("Prefer", "count=exact") // <-- FIX: Pass as header
             .header("Accept", "application/json")
             .send()
             .await
             .map_err(|e| format!("HTTP request error: {:?}", e))?;
 
-        let response_status = response.status();
-        if !response_status.is_success() {
+        let res_status = response.status();
+        if !res_status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("Request failed with status: {}\n{}", response_status, body));
+            return Err(format!("Request failed with status: {}\n{}", res_status, body));
         }
 
-        // Get the count from the `content-range` header
+        // Read Content-Range header
         match response.headers().get("content-range") {
             Some(val) => {
                 let val = val.to_str().map_err(|e| e.to_string())?;

@@ -467,4 +467,31 @@ mod tests {
         clean_all().await;
         let _ = supabase_client.delete(table_name, &diff_id).await;
     }
+
+    #[tokio::test]
+    async fn can_select_with_empty_query() {
+        dotenv().ok();
+        let client = SupabaseClient::new(
+            env::var("SUPABASE_URL").unwrap(),
+            env::var("SUPABASE_API_KEY").unwrap(),
+            None,
+        );
+        let table = "test_data";
+
+        // Insert records with names that follow a pattern.
+        let _ = client.insert(table, json!({ "name": "Alpha" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Beta" })).await.unwrap();
+        let _ = client.insert(table, json!({ "name": "Alphabet" })).await.unwrap();
+        sleep(Duration::from_millis(30)).await;
+
+        // Build a DSL query: select records where name is like "Alph%"
+        // The pattern "Alph%" will match "Alpha" and "Alphabet" (since "%" is a wildcard).
+
+        let select_query = SelectQuery::new();
+        let records = client.select(table, select_query).await.unwrap();
+
+        // Expect to match 2 records: "Alpha" and "Alphabet".
+        assert_eq!(records.len(), 3);
+        clean_all().await;
+    }
 }
