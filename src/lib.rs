@@ -7,6 +7,7 @@ pub mod insert;
 pub mod select;
 pub mod universals;
 pub mod auth;
+pub mod count;
 
 #[derive(Debug, Clone)]
 pub struct SupabaseClient {
