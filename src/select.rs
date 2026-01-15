@@ -208,8 +208,11 @@ impl SupabaseClient {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !response.status().is_success() {
-            return Err(format!("Request failed with status: {}", response.status()));
+
+        let res_status = response.status();
+        if !res_status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Request failed with status: {}. Body: {}", res_status, body));
         }
         let json: Vec<Value> = response.json().await.map_err(|e| e.to_string())?;
         Ok(json)

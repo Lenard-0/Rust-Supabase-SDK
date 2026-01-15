@@ -26,7 +26,7 @@ impl SupabaseClient {
         let res_status = response.status();
         if !res_status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("Request failed with status: {}\n{}", res_status, body));
+            return Err(format!("Request failed with status: {}. Body: {}", res_status, body));
         }
 
         // Read Content-Range header
