@@ -1,8 +1,8 @@
-use reqwest::{self, header::HeaderValue, Client};
 use serde_json::Value;
 use urlencoding::encode;
-use url::Url;
 
+use crate::error::Result;
+use crate::universals::{HttpMethod, RequestOptions};
 use crate::SupabaseClient;
 
 /// Represents a filter operator.
@@ -160,6 +160,12 @@ pub struct SelectQuery {
     pub sorts: Vec<Sort>,
 }
 
+impl Default for SelectQuery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelectQuery {
     /// Creates a new empty select query.
     pub fn new() -> Self {
@@ -172,7 +178,7 @@ impl SelectQuery {
     /// Returns the complete query string.
     ///
     /// For example:
-    /// ```
+    /// ```text
     /// select=%2A&name=eq.Test%20Organisation&id=eq.123&order=created_at.asc
     /// ```
     pub fn to_query_string(&self) -> String {
@@ -194,32 +200,26 @@ impl SelectQuery {
 
 impl SupabaseClient {
     /// Select rows from the specified table using a constructed `SelectQuery`.
-    /// This method builds the query string from the filter group and sorts defined in the `SelectQuery` struct.
-    pub async fn select(&self, table_name: &str, query: SelectQuery) -> Result<Vec<Value>, String> {
-        let mut url = Url::parse(&format!("{}/rest/v1/{}", self.url, table_name))
-            .map_err(|e| e.to_string())?;
-        let query_string = query.to_query_string();
-        url.set_query(Some(&query_string));
+    ///
+    /// **Deprecated:** prefer the chainable builder
+    /// [`client.from(table).select("*")...`](crate::postgrest::TableBuilder::select).
+    #[deprecated(since = "0.3.0", note = "use `client.from(table).select(...).filter(...)`")]
+    pub async fn select(&self, table_name: &str, query: SelectQuery) -> Result<Vec<Value>> {
+        let path = format!("/rest/v1/{}?{}", table_name, query.to_query_string());
 
-        let client = Client::new();
-        let response = client
-            .get(url)
-            .header("apikey", HeaderValue::from_str(&self.api_key).map_err(|e| e.to_string())?)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let value = self
+            .request_with(&path, HttpMethod::Get, None, &RequestOptions::postgrest())
+            .await?;
 
-        let res_status = response.status();
-        if !res_status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("Request failed with status: {}. Body: {}", res_status, body));
+        match value {
+            Value::Array(arr) => Ok(arr),
+            Value::Null => Ok(Vec::new()),
+            other => Ok(vec![other]),
         }
-        let json: Vec<Value> = response.json().await.map_err(|e| e.to_string())?;
-        Ok(json)
     }
 }
 
-/// --- DSL for building queries with operators --- ///
+// --- DSL for building queries with operators ---
 
 use std::ops::{BitAnd, BitOr};
 
@@ -387,5 +387,247 @@ macro_rules! query {
     ( ( $($inner:tt)+ ) ) => {
         $crate::select::q!($($inner)+)
     };
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    // --- Operator::as_str ---
+
+    #[test]
+    fn operator_as_str_all_variants() {
+        assert_eq!(Operator::Eq.as_str(), "eq");
+        assert_eq!(Operator::Neq.as_str(), "neq");
+        assert_eq!(Operator::Gt.as_str(), "gt");
+        assert_eq!(Operator::Lt.as_str(), "lt");
+        assert_eq!(Operator::Gte.as_str(), "gte");
+        assert_eq!(Operator::Lte.as_str(), "lte");
+        assert_eq!(Operator::Like.as_str(), "like");
+    }
+
+    // --- Filter ---
+
+    #[test]
+    fn filter_to_query_plain() {
+        let f = Filter::new("name", Operator::Eq, "Alice");
+        assert_eq!(f.to_query(), "name=eq.Alice");
+    }
+
+    #[test]
+    fn filter_to_query_encodes_spaces() {
+        let f = Filter::new("name", Operator::Eq, "Org X");
+        assert_eq!(f.to_query(), "name=eq.Org%20X");
+    }
+
+    #[test]
+    fn filter_to_query_encodes_column() {
+        let f = Filter::new("my col", Operator::Neq, "val");
+        assert!(f.to_query().starts_with("my%20col="), "{}", f.to_query());
+    }
+
+    #[test]
+    fn filter_to_or_query() {
+        let f = Filter::new("id", Operator::Eq, "123");
+        assert_eq!(f.to_or_query(), "id.eq.123");
+    }
+
+    #[test]
+    fn filter_to_or_query_encodes_value() {
+        let f = Filter::new("name", Operator::Like, "Org*");
+        assert_eq!(f.to_or_query(), "name.like.Org%2A");
+    }
+
+    // --- FilterGroup ---
+
+    #[test]
+    fn filter_group_and_joins_with_ampersand() {
+        let filters = vec![
+            Filter::new("a", Operator::Eq, "1"),
+            Filter::new("b", Operator::Eq, "2"),
+        ];
+        let g = FilterGroup::new(LogicalOperator::And, filters);
+        let q = g.to_query_string();
+        assert!(q.contains("a=eq.1"), "{q}");
+        assert!(q.contains("b=eq.2"), "{q}");
+        assert!(q.contains('&'), "{q}");
+    }
+
+    #[test]
+    fn filter_group_or_wraps_in_or_parens() {
+        let filters = vec![
+            Filter::new("status", Operator::Eq, "active"),
+            Filter::new("status", Operator::Eq, "trial"),
+        ];
+        let g = FilterGroup::new(LogicalOperator::Or, filters);
+        let q = g.to_query_string();
+        assert!(q.starts_with("or=("), "{q}");
+        assert!(q.contains("status.eq.active"), "{q}");
+        assert!(q.contains("status.eq.trial"), "{q}");
+    }
+
+    #[test]
+    fn filter_group_empty_and_produces_empty_string() {
+        let g = FilterGroup::new(LogicalOperator::And, vec![]);
+        assert_eq!(g.to_query_string(), "");
+    }
+
+    // --- SortDirection ---
+
+    #[test]
+    fn sort_direction_as_str() {
+        assert_eq!(SortDirection::Asc.as_str(), "asc");
+        assert_eq!(SortDirection::Desc.as_str(), "desc");
+    }
+
+    // --- Sort ---
+
+    #[test]
+    fn sort_to_query() {
+        let s = Sort::new("created_at", SortDirection::Desc);
+        assert_eq!(s.to_query(), "order=created_at.desc");
+    }
+
+    #[test]
+    fn sort_to_query_asc() {
+        assert_eq!(Sort::new("name", SortDirection::Asc).to_query(), "order=name.asc");
+    }
+
+    // --- SelectQuery ---
+
+    #[test]
+    fn select_query_default_has_only_select_star() {
+        let q = SelectQuery::new().to_query_string();
+        assert_eq!(q, "select=%2A");
+    }
+
+    #[test]
+    fn select_query_with_and_filter() {
+        let q = SelectQuery {
+            filter: Some(FilterGroup::new(
+                LogicalOperator::And,
+                vec![Filter::new("id", Operator::Eq, "42")],
+            )),
+            sorts: Vec::new(),
+        }
+        .to_query_string();
+        assert!(q.contains("id=eq.42"), "{q}");
+        assert!(q.starts_with("select="), "{q}");
+    }
+
+    #[test]
+    fn select_query_with_sort() {
+        let q = SelectQuery::new()
+            .sort("name", SortDirection::Asc)
+            .to_query_string();
+        assert!(q.contains("order=name.asc"), "{q}");
+    }
+
+    #[test]
+    fn select_query_with_filter_and_sort() {
+        let q = SelectQuery {
+            filter: Some(FilterGroup::new(
+                LogicalOperator::And,
+                vec![Filter::new("status", Operator::Eq, "active")],
+            )),
+            sorts: vec![Sort::new("created_at", SortDirection::Desc)],
+        }
+        .to_query_string();
+        assert!(q.contains("status=eq.active"), "{q}");
+        assert!(q.contains("order=created_at.desc"), "{q}");
+    }
+
+    // --- Field builder ---
+
+    #[test]
+    fn field_eq_produces_condition() {
+        let q = Field::new("score").eq(100).to_query();
+        let qs = q.to_query_string();
+        assert!(qs.contains("score=eq.100"), "{qs}");
+    }
+
+    #[test]
+    fn field_neq() {
+        let q = Field::new("status").neq("banned").to_query().to_query_string();
+        assert!(q.contains("status=neq.banned"), "{q}");
+    }
+
+    #[test]
+    fn field_gt_lt_gte_lte() {
+        assert!(Field::new("x").gt(5).to_query().to_query_string().contains("x=gt.5"));
+        assert!(Field::new("x").lt(5).to_query().to_query_string().contains("x=lt.5"));
+        assert!(Field::new("x").gte(5).to_query().to_query_string().contains("x=gte.5"));
+        assert!(Field::new("x").lte(5).to_query().to_query_string().contains("x=lte.5"));
+    }
+
+    #[test]
+    fn field_like() {
+        let q = Field::new("name").like("%alice%").to_query().to_query_string();
+        assert!(q.contains("name=like."), "{q}");
+    }
+
+    // --- Query combinators ---
+
+    #[test]
+    fn query_bitand_produces_and_group() {
+        let q = (Field::new("a").eq(1) & Field::new("b").eq(2))
+            .to_filter_group();
+        assert_eq!(q.operator, LogicalOperator::And);
+        assert_eq!(q.filters.len(), 2);
+    }
+
+    #[test]
+    fn query_bitor_produces_or_group() {
+        let q = (Field::new("a").eq(1) | Field::new("b").eq(2))
+            .to_filter_group();
+        assert_eq!(q.operator, LogicalOperator::Or);
+        assert_eq!(q.filters.len(), 2);
+    }
+
+    #[test]
+    fn query_condition_to_filter_group_is_and_single() {
+        let q = Field::new("id").eq("x").to_filter_group();
+        assert_eq!(q.operator, LogicalOperator::And);
+        assert_eq!(q.filters.len(), 1);
+    }
+
+    // --- query! macro ---
+
+    #[test]
+    fn query_macro_eq() {
+        let q = query!("name" == "Alice");
+        let qs = q.to_query().to_query_string();
+        assert!(qs.contains("name=eq.Alice"), "{qs}");
+    }
+
+    #[test]
+    fn query_macro_neq() {
+        let q = query!("status" != "banned");
+        let qs = q.to_query().to_query_string();
+        assert!(qs.contains("status=neq.banned"), "{qs}");
+    }
+
+    #[test]
+    fn query_macro_gt_lt() {
+        let q = query!("score" > 90);
+        assert!(q.to_query().to_query_string().contains("score=gt.90"));
+        let q2 = query!("score" < 10);
+        assert!(q2.to_query().to_query_string().contains("score=lt.10"));
+    }
+
+    #[test]
+    fn query_macro_gte_lte() {
+        assert!(query!("x" >= 5).to_query().to_query_string().contains("x=gte.5"));
+        assert!(query!("x" <= 5).to_query().to_query_string().contains("x=lte.5"));
+    }
+
+    #[test]
+    fn select_query_default_matches_new() {
+        let d = SelectQuery::default();
+        let n = SelectQuery::new();
+        assert_eq!(d.filter, n.filter);
+        assert_eq!(d.sorts.len(), n.sorts.len());
+    }
 }
 

@@ -1,0 +1,5 @@
+edition = "2021"
+max_width = 100
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+newline_style = "Unix"

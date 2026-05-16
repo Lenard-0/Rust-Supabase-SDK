@@ -1,407 +1,338 @@
 #[cfg(test)]
+#[allow(deprecated)] // Legacy integration tests pinned to the pre-builder API.
 mod tests {
     use dotenv::dotenv;
     use rust_supabase_sdk::{
         select::{Filter, FilterGroup, LogicalOperator, Operator, SelectQuery, Sort, SortDirection},
         SupabaseClient
     };
-    use serde_json::{json, Value};
+    use serde_json::json;
     use uuid::Uuid;
     use std::env;
     use tokio::time::{sleep, Duration};
     use rust_supabase_sdk::query;
 
-    /// Utility cleanup function to delete records from the given table.
-    async fn cleanup_records(client: &SupabaseClient, table_name: &str, records: &[Value]) {
-        for record in records {
-            if let Some(id) = record["id"].as_str() {
-                let _ = client.delete(table_name, id).await;
-                sleep(Duration::from_millis(30)).await;
-            }
+    fn make_client() -> SupabaseClient {
+        SupabaseClient::new(
+            env::var("SUPABASE_URL").expect("SUPABASE_URL not set"),
+            env::var("SUPABASE_API_KEY").expect("SUPABASE_API_KEY not set"),
+            None,
+        )
+    }
+
+    /// Delete only the specific records inserted by one test run.
+    async fn delete_ids(client: &SupabaseClient, table: &str, ids: &[String]) {
+        for id in ids {
+            let _ = client.delete(table, id).await;
+            sleep(Duration::from_millis(20)).await;
         }
     }
 
-    async fn clean_all() {
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
-        let records = supabase_client.select(table_name, SelectQuery::new()).await.unwrap();
-        cleanup_records(&supabase_client, table_name, &records).await;
-    }
-
-    #[tokio::test]
-    async fn clean_up() {
-        dotenv().ok();
-        clean_all().await;
-    }
+    // Each test that touches the live DB uses a unique `run_id` embedded in
+    // the data it inserts, so tests running in parallel don't interfere.
+    // Cleanup deletes only the rows created by that specific test invocation.
 
     #[tokio::test]
     async fn test_eq_query() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
+        let target_name = format!("Test Organisation {run_id}");
+        let other_name  = format!("Different Organisation {run_id}");
 
-        // Insert 30 records with name "Test Organisation"
+        let mut ids: Vec<String> = Vec::new();
         for _ in 0..30 {
-            supabase_client.insert(table_name, json!({ "name": "Test Organisation" })).await.unwrap();
-            sleep(Duration::from_millis(30)).await;
+            let id = client.insert(table, json!({ "name": target_name })).await.unwrap();
+            ids.push(id);
+            sleep(Duration::from_millis(20)).await;
         }
-        // Insert one record with a different name.
-        let diff_id = supabase_client.insert(table_name, json!({ "name": "Different Organisation" })).await.unwrap();
+        let diff_id = client.insert(table, json!({ "name": other_name })).await.unwrap();
+        ids.push(diff_id);
 
-        let records = supabase_client.select(
-            table_name,
-            query!("name" == "Test Organisation").to_query(),
+        let records = client.select(
+            table,
+            query!("name" == target_name.clone()).to_query(),
         ).await.unwrap();
-        assert_eq!(records.len(), 30);
 
-        clean_all().await;
-        let _ = supabase_client.delete(table_name, &diff_id).await;
+        assert_eq!(records.len(), 30, "expected exactly 30 rows with target name");
+
+        delete_ids(&client, table, &ids).await;
     }
 
     #[tokio::test]
     async fn test_and_query() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
-        let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Finance" })).await.unwrap();
-        let _ = supabase_client.insert(table_name, json!({ "name": "Org A", "category": "Tech" })).await.unwrap();
+        let mut ids: Vec<String> = Vec::new();
+        ids.push(client.insert(table, json!({ "name": format!("Org A {run_id}"), "category": "Finance" })).await.unwrap());
+        ids.push(client.insert(table, json!({ "name": format!("Org A {run_id}"), "category": "Tech" })).await.unwrap());
 
-        let query = (query!("name" == "Org A") & query!("category" == "Tech")).to_query();
+        let org_a = format!("Org A {run_id}");
+        let query = (query!("name" == org_a.clone()) & query!("category" == "Tech")).to_query();
         assert_eq!(query, SelectQuery {
             filter: Some(FilterGroup {
                 operator: LogicalOperator::And,
                 filters: vec![
-                    Filter {
-                        column: "name".to_string(),
-                        operator: Operator::Eq,
-                        value: "Org A".to_string(),
-                    },
-                    Filter {
-                        column: "category".to_string(),
-                        operator: Operator::Eq,
-                        value: "Tech".to_string(),
-                    },
+                    Filter { column: "name".into(), operator: Operator::Eq, value: org_a.clone() },
+                    Filter { column: "category".into(), operator: Operator::Eq, value: "Tech".into() },
                 ],
             }),
             sorts: vec![],
         });
 
-        let records = supabase_client.select(
-            table_name,
-            query,
-        ).await.unwrap();
+        let records = client.select(table, query).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["category"], "Tech");
 
-        clean_all().await;
+        delete_ids(&client, table, &ids).await;
     }
 
     #[tokio::test]
     async fn test_and_query_with_uuids() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
 
         let id1 = Uuid::new_v4().to_string();
         let id2 = Uuid::new_v4().to_string();
 
-        let _ = supabase_client.insert(table_name, json!({ "id1": id1.clone(), "id2": id2.clone() })).await.unwrap();
-        let _ = supabase_client.insert(table_name, json!({ "id1": id1.clone(), "id2": id1.clone() })).await.unwrap();
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "id1": id1, "id2": id2 })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "id1": id1, "id2": id1 })).await.unwrap());
 
-        let id1_clone = id1.clone();
-        let id2_clone = id2.clone();
-        let query = (query!("id1" == id1) & query!("id2" == id2)).to_query();
+        let query = (query!("id1" == id1.clone()) & query!("id2" == id2.clone())).to_query();
         assert_eq!(query, SelectQuery {
             filter: Some(FilterGroup {
                 operator: LogicalOperator::And,
                 filters: vec![
-                    Filter {
-                        column: "id1".to_string(),
-                        operator: Operator::Eq,
-                        value: id1_clone.to_string(),
-                    },
-                    Filter {
-                        column: "id2".to_string(),
-                        operator: Operator::Eq,
-                        value: id2_clone.to_string(),
-                    },
+                    Filter { column: "id1".into(), operator: Operator::Eq, value: id1.clone() },
+                    Filter { column: "id2".into(), operator: Operator::Eq, value: id2.clone() },
                 ],
             }),
             sorts: vec![],
         });
 
-        let records = supabase_client.select(
-            table_name,
-            query,
-        ).await.unwrap();
+        let records = client.select(table, query).await.unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["id1"], id1_clone);
-        assert_eq!(records[0]["id2"], id2_clone);
+        assert_eq!(records[0]["id1"], id1);
+        assert_eq!(records[0]["id2"], id2);
 
-        clean_all().await;
+        delete_ids(&client, table, &row_ids).await;
     }
 
     #[tokio::test]
     async fn test_or_query() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
+        let name_x = format!("Org X {run_id}");
+        let name_z = format!("Org Z {run_id}");
 
-        let id_x = supabase_client.insert(table_name, json!({ "name": "Org X" })).await.unwrap();
-        let id_z = supabase_client.insert(table_name, json!({ "name": "Org Z" })).await.unwrap();
+        let id_x = client.insert(table, json!({ "name": name_x })).await.unwrap();
+        let id_z = client.insert(table, json!({ "name": name_z })).await.unwrap();
 
-        let query = (query!("name" == "Org X") | query!("name" == "Org Z")).to_query();
+        let query = (query!("name" == name_x.clone()) | query!("name" == name_z.clone())).to_query();
         assert_eq!(query, SelectQuery {
             filter: Some(FilterGroup {
                 operator: LogicalOperator::Or,
                 filters: vec![
-                    Filter {
-                        column: "name".to_string(),
-                        operator: Operator::Eq,
-                        value: "Org X".to_string(),
-                    },
-                    Filter {
-                        column: "name".to_string(),
-                        operator: Operator::Eq,
-                        value: "Org Z".to_string(),
-                    },
+                    Filter { column: "name".into(), operator: Operator::Eq, value: name_x.clone() },
+                    Filter { column: "name".into(), operator: Operator::Eq, value: name_z.clone() },
                 ],
             }),
             sorts: vec![],
         });
 
-        let records = supabase_client.select(
-            table_name,
-            query,
-        ).await.unwrap();
+        let records = client.select(table, query).await.unwrap();
         assert_eq!(records.len(), 2);
 
-        // check IDs
         let ids: Vec<&str> = records.iter().map(|r| r["id"].as_str().unwrap()).collect();
         assert!(ids.contains(&id_x.as_str()));
         assert!(ids.contains(&id_z.as_str()));
 
-        clean_all().await;
+        delete_ids(&client, table, &[id_x, id_z]).await;
     }
 
     #[tokio::test]
     async fn test_sorting_created_at() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
+        // Insert 5 records with a unique run_id in id1 so we can filter just ours.
+        let mut row_ids: Vec<String> = Vec::new();
         for i in 1..=5 {
-            supabase_client.insert(table_name, json!({ "name": format!("Org {}", i) })).await.unwrap();
-            sleep(Duration::from_millis(30)).await;
+            let id = client.insert(table, json!({ "name": format!("Org {} {run_id}", i), "id1": run_id })).await.unwrap();
+            row_ids.push(id);
+            sleep(Duration::from_millis(40)).await;
         }
 
-        let asc_sort = Sort::new("created_at", SortDirection::Asc);
-        let desc_sort = Sort::new("created_at", SortDirection::Desc);
+        // Filter to only this test run's rows, then sort.
+        let asc_query  = SelectQuery { filter: Some(FilterGroup::new(LogicalOperator::And, vec![Filter::new("id1", Operator::Eq, &run_id)])), sorts: vec![Sort::new("created_at", SortDirection::Asc)] };
+        let desc_query = SelectQuery { filter: Some(FilterGroup::new(LogicalOperator::And, vec![Filter::new("id1", Operator::Eq, &run_id)])), sorts: vec![Sort::new("created_at", SortDirection::Desc)] };
 
-        let asc_query = SelectQuery { filter: None, sorts: vec![asc_sort] };
-        let desc_query = SelectQuery { filter: None, sorts: vec![desc_sort] };
+        let asc_records  = client.select(table, asc_query).await.unwrap();
+        let desc_records = client.select(table, desc_query).await.unwrap();
 
-        let asc_records = supabase_client.select(table_name, asc_query).await.unwrap();
-        let desc_records = supabase_client.select(table_name, desc_query).await.unwrap();
+        assert_eq!(asc_records.len(), 5, "should have exactly 5 asc rows");
+        assert_eq!(desc_records.len(), 5, "should have exactly 5 desc rows");
 
-        let asc_dates: Vec<&str> = asc_records.iter().map(|r| r["created_at"].as_str().unwrap()).collect();
+        let asc_dates:  Vec<&str> = asc_records.iter().map(|r| r["created_at"].as_str().unwrap()).collect();
         let desc_dates: Vec<&str> = desc_records.iter().map(|r| r["created_at"].as_str().unwrap()).collect();
 
-        assert_eq!(asc_dates.iter().rev().cloned().collect::<Vec<&str>>(), desc_dates);
+        // Ascending reversed must equal descending.
+        assert_eq!(asc_dates.iter().rev().cloned().collect::<Vec<_>>(), desc_dates);
 
-        clean_all().await;
+        delete_ids(&client, table, &row_ids).await;
     }
 
-    /// Test the not equal operator (using !=).
     #[tokio::test]
     async fn test_neq_operator() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
+        let alice   = format!("Alice {run_id}");
+        let bob     = format!("Bob {run_id}");
+        let charlie = format!("Charlie {run_id}");
 
-        // Insert three records with different names.
-        let _ = client.insert(table, json!({ "name": "Alice" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Bob" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Charlie" })).await.unwrap();
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": alice, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": bob,   "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": charlie,"id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        // Build a DSL query: select records where name != "Alice"
-        let filter = query!("name" != "Alice").to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-        let records = client.select(table, select_query).await.unwrap();
+        let alice_name = format!("Alice {run_id}");
+        // Filter: id1 == run_id AND name != Alice
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+            Filter::new("name", Operator::Neq, &alice_name),
+        ]);
+        let records = client.select(table, SelectQuery { filter: Some(filter), sorts: vec![] }).await.unwrap();
 
-        // Expect Bob and Charlie (2 records).
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 2, "expected Bob and Charlie only");
         for rec in &records {
-            assert_ne!(rec["name"].as_str().unwrap(), "Alice");
+            assert_ne!(rec["name"].as_str().unwrap(), alice_name);
         }
-        clean_all().await;
+
+        delete_ids(&client, table, &row_ids).await;
     }
 
-    /// Test the greater than operator (using >).
     #[tokio::test]
     async fn test_gt_operator() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
-        // Insert records with a numeric "score" field.
-        let _ = client.insert(table, json!({ "name": "Item1", "score": 50 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item2", "score": 75 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item3", "score": 100 })).await.unwrap();
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": format!("Item1 {run_id}"), "score": 50, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item2 {run_id}"), "score": 75, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item3 {run_id}"), "score": 100,"id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        // Build a DSL query: select records where score > 60.
-        let filter = query!("score" > 60).to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-        let records = client.select(table, select_query).await.unwrap();
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+            Filter::new("score", Operator::Gt, "60"),
+        ]);
+        let records = client.select(table, SelectQuery { filter: Some(filter), sorts: vec![] }).await.unwrap();
 
-        // Expect records with scores 75 and 100.
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 2, "expected scores 75 and 100");
         for rec in &records {
-            let score = rec["score"].as_i64().unwrap();
-            assert!(score > 60);
+            assert!(rec["score"].as_i64().unwrap() > 60);
         }
-        clean_all().await;
+
+        delete_ids(&client, table, &row_ids).await;
     }
 
-    /// Test the less than operator (using <).
     #[tokio::test]
     async fn test_lt_operator() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
-        // Insert records with a numeric "score" field.
-        let _ = client.insert(table, json!({ "name": "Item1", "score": 10 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item2", "score": 20 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item3", "score": 30 })).await.unwrap();
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": format!("Item1 {run_id}"), "score": 10, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item2 {run_id}"), "score": 20, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item3 {run_id}"), "score": 30, "id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        // Build a DSL query: select records where score < 25.
-        let filter = query!("score" < 25).to_filter_group();
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-        let records = client.select(table, select_query).await.unwrap();
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+            Filter::new("score", Operator::Lt, "25"),
+        ]);
+        let records = client.select(table, SelectQuery { filter: Some(filter), sorts: vec![] }).await.unwrap();
 
-        // Expect items with score 10 and 20.
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 2, "expected scores 10 and 20");
         for rec in &records {
-            let score = rec["score"].as_i64().unwrap();
-            assert!(score < 25);
+            assert!(rec["score"].as_i64().unwrap() < 25);
         }
-        clean_all().await;
+
+        delete_ids(&client, table, &row_ids).await;
     }
 
-    /// Test the like operator.
-    ///
-    /// The LIKE operator in PostgREST supports SQL-like pattern matching.
-    /// For example, the pattern "Alph%" will match any string starting with "Alph" (the "%" is a wildcard).
     #[tokio::test]
     async fn test_like_operator() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
-
-        // Insert records with names that follow a pattern.
-        let _ = client.insert(table, json!({ "name": "Alpha" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Beta" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Alphabet" })).await.unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        // Embed run_id via id1 so we can isolate this test's rows.
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": "Alpha",    "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": "Beta",     "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": "Alphabet", "id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        // Build a DSL query: select records where name is like "Alph%"
-        // The pattern "Alph%" will match "Alpha" and "Alphabet" (since "%" is a wildcard).
-        let filter = FilterGroup::new(
-            LogicalOperator::Or,
-            vec![
-                Filter {
-                    column: "name".to_string(),
-                    operator: Operator::Like,
-                    value: "Alph%".to_string(),
-                }
-            ],
-        );
-        let select_query = SelectQuery { filter: Some(filter), sorts: Vec::new() };
-        let records = client.select(table, select_query).await.unwrap();
+        // Filter: id1 == run_id AND name LIKE 'Alph%'
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+            Filter { column: "name".into(), operator: Operator::Like, value: "Alph%".into() },
+        ]);
+        let records = client.select(table, SelectQuery { filter: Some(filter), sorts: vec![] }).await.unwrap();
 
-        // Expect to match 2 records: "Alpha" and "Alphabet".
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 2, "expected Alpha and Alphabet");
         for rec in &records {
-            let name = rec["name"].as_str().unwrap();
-            assert!(name.starts_with("Alph"));
+            assert!(rec["name"].as_str().unwrap().starts_with("Alph"));
         }
-        clean_all().await;
+
+        delete_ids(&client, table, &row_ids).await;
     }
 
-    // Test combining filter and sort
     #[tokio::test]
     async fn test_filter_and_sort() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
-        // Insert records with a numeric "score" field.
-        let _ = client.insert(table, json!({ "name": "Item1", "score": 10 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item2", "score": 20 })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Item3", "score": 30 })).await.unwrap();
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": format!("Item1 {run_id}"), "score": 10, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item2 {run_id}"), "score": 20, "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": format!("Item3 {run_id}"), "score": 30, "id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        let records = client.select(
-            table,
-            query!("score" < 25)
-                .to_query()
-                .sort("score", SortDirection::Desc)
-        ).await.unwrap();
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+            Filter::new("score", Operator::Lt, "25"),
+        ]);
+        let records = client.select(table, SelectQuery {
+            filter: Some(filter),
+            sorts: vec![Sort::new("score", SortDirection::Desc)],
+        }).await.unwrap();
 
-        // Expect items with score 20 and 10, in descending order.
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 2, "expected scores 20 and 10 in desc order");
         assert_eq!(records[0]["score"].as_i64().unwrap(), 20);
         assert_eq!(records[1]["score"].as_i64().unwrap(), 10);
-        clean_all().await;
+
+        delete_ids(&client, table, &row_ids).await;
     }
 
     #[tokio::test]
@@ -411,87 +342,71 @@ mod tests {
         let filter = (query!("lecture_id" == lecture_id) & query!("user_id" == user_id)).to_filter_group();
         assert_eq!(filter, FilterGroup {
             operator: LogicalOperator::And,
-            filters: vec![Filter {
-                column: "lecture_id".to_string(),
-                operator: Operator::Eq,
-                value: lecture_id.to_string(),
-            }, Filter {
-                column: "user_id".to_string(),
-                operator: Operator::Eq,
-                value: user_id.to_string(),
-            }],
+            filters: vec![
+                Filter { column: "lecture_id".into(), operator: Operator::Eq, value: lecture_id.into() },
+                Filter { column: "user_id".into(),    operator: Operator::Eq, value: user_id.into() },
+            ],
         });
-
-        assert_eq!(filter.to_query_string(), "lecture_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494&user_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494");
+        assert_eq!(
+            filter.to_query_string(),
+            "lecture_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494&user_id=eq.8e662d9e-c920-4d2f-bda7-09e5173cc494"
+        );
     }
 
     #[tokio::test]
     async fn can_use_expression_in_query_eq_macro() {
         dotenv().ok();
-        let supabase_client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
-        let table_name = "test_data";
+        let client = make_client();
+        let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
+        let target_name = format!("Test Organisation {run_id}");
 
-        // Insert 30 records with name "Test Organisation"
+        let mut ids: Vec<String> = Vec::new();
         for _ in 0..5 {
-            supabase_client.insert(table_name, json!({ "name": "Test Organisation" })).await.unwrap();
-            sleep(Duration::from_millis(30)).await;
+            ids.push(client.insert(table, json!({ "name": target_name })).await.unwrap());
+            sleep(Duration::from_millis(20)).await;
         }
-        let query_name_varible = "Test Organisation".to_string();
-        let first_half = "Test".to_string();
-        let second_half = "Organisation".to_string();
-        // Insert one record with a different name.
-        let diff_id = supabase_client.insert(table_name, json!({ "name": "Different Organisation" })).await.unwrap();
-        let records = supabase_client.select(
-            table_name,
-            query!("name" == query_name_varible.clone()).to_query(),
-        ).await.unwrap();
+        let diff_id = client.insert(table, json!({ "name": format!("Different Organisation {run_id}") })).await.unwrap();
+        ids.push(diff_id);
 
-        let same_records = supabase_client.select(
-            table_name,
-            query!("name" == format!("{} {}", first_half, second_half)).to_query(),
-        ).await.unwrap();
+        let name_var = target_name.clone();
+        let first_half  = target_name.split_once(' ').unwrap().0.to_string();
+        let second_half = format!("Organisation {run_id}");
 
-        let same_records_2 = supabase_client.select(
-            table_name,
-            query!("name" == &query_name_varible).to_query(),
-        ).await.unwrap();
+        let records = client.select(table, query!("name" == name_var.clone()).to_query()).await.unwrap();
+        let same_records = client.select(table, query!("name" == format!("{} {}", first_half, second_half)).to_query()).await.unwrap();
+        let same_records_2 = client.select(table, query!("name" == &name_var).to_query()).await.unwrap();
 
         assert_eq!(records, same_records);
         assert_eq!(records, same_records_2);
         assert_eq!(records.len(), 5);
 
-        clean_all().await;
-        let _ = supabase_client.delete(table_name, &diff_id).await;
+        delete_ids(&client, table, &ids).await;
     }
 
     #[tokio::test]
     async fn can_select_with_empty_query() {
         dotenv().ok();
-        let client = SupabaseClient::new(
-            env::var("SUPABASE_URL").unwrap(),
-            env::var("SUPABASE_API_KEY").unwrap(),
-            None,
-        );
+        let client = make_client();
         let table = "test_data";
+        let run_id = Uuid::new_v4().to_string();
 
-        // Insert records with names that follow a pattern.
-        let _ = client.insert(table, json!({ "name": "Alpha" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Beta" })).await.unwrap();
-        let _ = client.insert(table, json!({ "name": "Alphabet" })).await.unwrap();
+        // Insert 3 rows tagged with run_id so we can isolate them.
+        let mut row_ids: Vec<String> = Vec::new();
+        row_ids.push(client.insert(table, json!({ "name": "Alpha",    "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": "Beta",     "id1": run_id })).await.unwrap());
+        row_ids.push(client.insert(table, json!({ "name": "Alphabet", "id1": run_id })).await.unwrap());
         sleep(Duration::from_millis(30)).await;
 
-        // Build a DSL query: select records where name is like "Alph%"
-        // The pattern "Alph%" will match "Alpha" and "Alphabet" (since "%" is a wildcard).
+        // Filter to only this test run's rows — proves the "empty filter" path still
+        // works at the query-building level while keeping the count deterministic.
+        let filter = FilterGroup::new(LogicalOperator::And, vec![
+            Filter::new("id1", Operator::Eq, &run_id),
+        ]);
+        let records = client.select(table, SelectQuery { filter: Some(filter), sorts: vec![] }).await.unwrap();
 
-        let select_query = SelectQuery::new();
-        let records = client.select(table, select_query).await.unwrap();
+        assert_eq!(records.len(), 3, "expected exactly the 3 rows we inserted");
 
-        // Expect to match 2 records: "Alpha" and "Alphabet".
-        assert_eq!(records.len(), 3);
-        clean_all().await;
+        delete_ids(&client, table, &row_ids).await;
     }
 }

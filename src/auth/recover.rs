@@ -1,62 +1,54 @@
-use reqwest::Client;
+//! Legacy password-recovery helpers — preserved as deprecated wrappers around
+//! the new auth namespace.
+
 use serde_json::json;
+
+use crate::error::Result;
+use crate::universals::{HttpMethod, RequestOptions};
 use crate::SupabaseClient;
 
 impl SupabaseClient {
-    pub async fn forgot_password(&self, email: &str) -> Result<(), String> {
-        let request_url = format!("{}/auth/v1/recover", self.url);
-        let client = Client::new();
-        let json = json!({
-            "email": email
-        });
-        let response = client
-            .post(request_url)
-            .header("apikey", &self.api_key)
-            .header("Authorization", format!("Bearer {}", &self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&json)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-
-        let status = response.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            let error_message = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            Err(format!("Insert request failed with status {}: {}", status, error_message))
-        }
+    /// **Deprecated:** use [`client.auth().reset_password_for_email(...)`](super::Auth::reset_password_for_email).
+    #[deprecated(
+        since = "0.5.0",
+        note = "use `client.auth().reset_password_for_email(email, ResetPasswordOptions::default())`"
+    )]
+    pub async fn forgot_password(&self, email: &str) -> Result<()> {
+        self.request_with(
+            "/auth/v1/recover",
+            HttpMethod::Post,
+            Some(json!({ "email": email })),
+            &RequestOptions::auth(),
+        )
+        .await?;
+        Ok(())
     }
 
-    pub async fn reset_password(&self, new_password: &str, access_token: &str, otp: &str) -> Result<(), String> {
-        let request_url = format!("{}/auth/v1/user", self.url);
-        let client = Client::new();
-        let json = json!({
-            "password": new_password,
-            "code": otp
-        });
-
-        let response = client
-            .put(&request_url)
-            .header("apikey", &self.api_key)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Content-Type", "application/json")
-            .json(&json)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-
-        let status = response.status();
-        if status.is_success() {
-            println!("Reset password request successful");
-            Ok(())
-        } else {
-            let error_message = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            eprintln!("Reset password request failed with status {}: {}", status, error_message);
-            Err(format!("Reset password request failed with status {}: {}", status, error_message))
-        }
+    /// **Deprecated:** combines recovery-OTP exchange with `update_user`. Prefer
+    /// the new flow: call [`Auth::verify_otp`](super::Auth::verify_otp) with
+    /// [`OtpType::Recovery`](super::OtpType::Recovery), then
+    /// [`Auth::update_user`](super::Auth::update_user) with the new password.
+    #[deprecated(
+        since = "0.5.0",
+        note = "use `client.auth().verify_otp(...)` then `client.auth().update_user(...)`"
+    )]
+    pub async fn reset_password(
+        &self,
+        new_password: &str,
+        access_token: &str,
+        otp: &str,
+    ) -> Result<()> {
+        let opts = RequestOptions {
+            bearer_override: Some(access_token.to_string()),
+            ..RequestOptions::auth()
+        };
+        self.request_with(
+            "/auth/v1/user",
+            HttpMethod::Put,
+            Some(json!({ "password": new_password, "code": otp })),
+            &opts,
+        )
+        .await?;
+        Ok(())
     }
 }

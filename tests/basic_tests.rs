@@ -1,5 +1,6 @@
 
 #[cfg(test)]
+#[allow(deprecated)] // Legacy integration tests pinned to the pre-builder API.
 mod tests {
     use dotenv::dotenv;
     use serde_json::json;
