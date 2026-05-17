@@ -1,6 +1,6 @@
 [package]
 name = "rust_supabase_sdk"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Async Rust client for Supabase — PostgREST, Auth, Storage, Edge Functions, and Realtime. Builder-pattern API mirroring `supabase-js`, with a `cargo supabase` codegen for typed row structs."
@@ -49,6 +49,7 @@ tokio = { version = "1", features = ["full"] }
 dotenv = "0.15.0"
 proptest = "1"
 wiremock = "0.6.5"
+trybuild = "1.0"
 
 [workspace]
 members = [".", "cargo-supabase"]

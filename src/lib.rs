@@ -5,7 +5,7 @@
 //! queries via [`from_row`], a pluggable [`SessionStore`] for auth persistence,
 //! retry/backoff for 429s, and feature-gated realtime + edge functions.
 //!
-//! # Quickstart
+//! # Quickstart — string-typed (zero setup)
 //!
 //! ```no_run
 //! use rust_supabase_sdk::SupabaseClient;
@@ -32,6 +32,48 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Type-safe queries — wrong column or value type fails to compile
+//!
+//! Opt into the typed path whenever you want compile-time guarantees about
+//! column names and value types. Run `cargo supabase gen types` once to
+//! emit a [`Row`] struct + a [`Column<R, V>`](postgrest::Column) constants
+//! block per table, then:
+//!
+//! ```no_run
+//! # use rust_supabase_sdk::{SupabaseClient, Row, postgrest::Column};
+//! # use serde::{Serialize, Deserialize};
+//! # #[derive(Debug, Clone, Serialize, Deserialize)]
+//! # struct Posts { id: String, status: String, view_count: i32, archived: Option<bool> }
+//! # impl Row for Posts { const TABLE: &'static str = "posts"; }
+//! # #[allow(non_upper_case_globals)]
+//! # impl Posts {
+//! #     pub const status: Column<Posts, String> = Column::new("status");
+//! #     pub const view_count: Column<Posts, i32> = Column::new("view_count");
+//! #     pub const archived: Column<Posts, Option<bool>> = Column::new("archived");
+//! # }
+//! # async fn demo(client: SupabaseClient) -> rust_supabase_sdk::Result<()> {
+//! let rows: Vec<Posts> = client.from_row::<Posts>()
+//!     .eq(Posts::status, "published".to_string())
+//!     .gt(Posts::view_count, 100i32)
+//!     .is_null(Posts::archived)
+//!     .execute()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! Misuse becomes a compile error:
+//!
+//! ```text
+//! .eq(Users::id, "x")                  // ✗ wrong row type
+//! .eq(Posts::view_count, "abc")        // ✗ view_count is i32, not &str
+//! .is_null(Posts::status)              // ✗ status is NOT NULL
+//! .like(Posts::view_count, "10%")      // ✗ like requires a string-typed column
+//! ```
+//!
+//! Runtime cost is zero — [`Column<R, V>`](postgrest::Column) is a
+//! `&'static str` plus a phantom type. The typed and string-typed paths
+//! coexist on the same client; pick per query.
 //!
 //! # Modules
 //!
@@ -76,13 +118,18 @@
 //! # Code generation
 //!
 //! The companion `cargo-supabase` binary introspects a project's PostgREST
-//! schema and emits Rust row structs ready for `client.from_row::<T>()`:
+//! schema and emits, per table, a [`Row`] struct **and** a
+//! [`Column<R, V>`](postgrest::Column) constants block for the typed query
+//! path:
 //!
 //! ```text
 //! cargo install cargo-supabase
 //! cargo supabase gen types --url $SUPABASE_URL --apikey $SUPABASE_SERVICE_ROLE_KEY \
 //!     --output src/generated.rs
 //! ```
+//!
+//! Re-run after any migration — schema drift becomes a compile error rather
+//! than a runtime decode failure.
 //!
 //! # Examples
 //!

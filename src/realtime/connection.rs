@@ -246,7 +246,7 @@ fn spawn_supervisor(
                     maybe_text = outbound_rx.recv() => {
                         match maybe_text {
                             Some(text) => {
-                                if let Err(e) = sink.send(WsMessage::Text(text)).await {
+                                if let Err(e) = sink.send(WsMessage::Text(text.into())).await {
                                     warn!(target: "supabase::realtime", error = %e, "send failed; reconnecting");
                                     break;
                                 }

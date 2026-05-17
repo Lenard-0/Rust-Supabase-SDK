@@ -1,0 +1,16 @@
+error[E0271]: type mismatch resolving `<[&str; 2] as IntoIterator>::Item == i32`
+  --> tests/trybuild/typed-columns/04_in_wrong_element_type.rs:32:33
+   |
+32 |         .in_(Posts::view_count, ["a", "b"]);
+   |          ---                    ^^^^^^^^^^ expected `i32`, found `&str`
+   |          |
+   |          required by a bound introduced by this call
+   |
+note: required by a bound in `TypedBuilder::<R>::in_`
+  --> src/postgrest/typed_builder.rs
+   |
+   |     pub fn in_<V, I>(mut self, col: Column<R, V>, vals: I) -> Self
+   |            --- required by a bound in this associated function
+...
+   |         I: IntoIterator<Item = V>,
+   |                         ^^^^^^^^ required by this bound in `TypedBuilder::<R>::in_`

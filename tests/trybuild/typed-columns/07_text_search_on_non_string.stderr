@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/typed-columns/07_text_search_on_non_string.rs:34:22
+   |
+34 |         .text_search(Posts::view_count, "rust", TextSearchType::Plain, None);
+   |          ----------- ^^^^^^^^^^^^^^^^^ expected `Column<Posts, String>`, found `Column<Posts, i32>`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected struct `Column<Posts, std::string::String>`
+              found struct `Column<Posts, i32>`
+note: method defined here
+  --> src/postgrest/typed_builder.rs
+   |
+   |     pub fn text_search(
+   |            ^^^^^^^^^^^

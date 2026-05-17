@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/typed-columns/06_like_on_non_string.rs:31:15
+   |
+31 |         .like(Posts::view_count, "10%");
+   |          ---- ^^^^^^^^^^^^^^^^^ expected `Column<Posts, String>`, found `Column<Posts, i32>`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected struct `Column<Posts, std::string::String>`
+              found struct `Column<Posts, i32>`
+note: method defined here
+  --> src/postgrest/typed_builder.rs
+   |
+   |     pub fn like(mut self, col: Column<R, String>, pattern: impl AsRef<str>) -> Self {
+   |            ^^^^

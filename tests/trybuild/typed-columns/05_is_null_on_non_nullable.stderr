@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/typed-columns/05_is_null_on_non_nullable.rs:31:18
+   |
+31 |         .is_null(Posts::status);
+   |          ------- ^^^^^^^^^^^^^ expected `Column<Posts, Option<_>>`, found `Column<Posts, String>`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected struct `Column<Posts, std::option::Option<_>>`
+              found struct `Column<Posts, std::string::String>`
+note: method defined here
+  --> src/postgrest/typed_builder.rs
+   |
+   |     pub fn is_null<V>(mut self, col: Column<R, Option<V>>) -> Self {
+   |            ^^^^^^^

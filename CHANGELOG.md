@@ -5,6 +5,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.4.0] - 2026-05-17
 
+### Type-safe column references — `Column<R, V>` + `TypedBuilder<R>`
+
+`from_row::<R>()` now returns a fully typed query builder. Columns emitted
+by the codegen carry both their row type and their value type at the type
+level, so wrong-table, wrong-value-type, nullable-only, and string-only
+filters are caught by the compiler instead of by PostgREST at runtime.
+
+The untyped, string-keyed builder (`client.from(table).eq("col", val)`)
+is **unchanged and remains first-class** — typed columns are an opt-in
+upgrade, not a replacement.
+
+#### Added
+
+- **`postgrest::Column<R, V>`** — zero-sized, `Copy` column reference
+  carrying a row type `R` and a value type `V`. Internally a
+  `&'static str` plus a phantom marker — runtime cost is zero.
+- **`postgrest::IntoColumnName<R>`** — trait that abstracts over typed
+  columns and `&str` for the cases where value-type checking isn't
+  valuable (currently used for `order` / `order_with`, where the
+  argument is a sort key rather than a filter value).
+- **`postgrest::TypedBuilder<R>`** — type-safe query builder with these
+  methods: `select`, `eq`, `neq`, `not_eq`, `gt`, `gte`, `lt`, `lte`,
+  `like`, `ilike`, `not_like`, `not_ilike`, `is_null`, `is_not_null`,
+  `is_bool`, `in_`, `not_in_`, `contains`, `contained_by`, `overlaps`,
+  `order`, `order_with`, `limit`, `offset`, `range`, `count`,
+  `text_search`, `execute`, `execute_with_count`, `single`,
+  `maybe_single`, `returns`, `into_untyped`, `build_path`.
+- **Codegen** now emits a column-constants block alongside every row
+  struct:
+  ```rust
+  #[allow(non_upper_case_globals)]
+  impl Posts {
+      pub const id: Column<Posts, i64> = Column::new("id");
+      pub const status: Column<Posts, Option<String>> = Column::new("status");
+      // ...
+  }
+  ```
+
+### Breaking
+
+- **`SupabaseClient::from_row::<R>()` now returns `TypedBuilder<R>`**
+  (previously returned `TableBuilder`). Callers that want the untyped
+  chain should either use `client.from(R::TABLE)` directly, or call
+  `.into_untyped()` on the typed builder to drop back to the previous
+  shape.
+
+#### Migration
+
+```text
+old                                                                  →  new
+─────────────────────────────────────────────────────────────────────────────
+client.from_row::<Posts>().select("id").eq("status", "x").await?
+  →  client.from_row::<Posts>().eq(Posts::status, "x".to_string()).execute().await?
+  (or, to keep the old shape exactly:)
+  →  client.from(Posts::TABLE).select("id").eq("status", "x").await?
+  (or, to bridge mid-chain:)
+  →  client.from_row::<Posts>().into_untyped().select("id").eq("status", "x").await?
+```
+
+#### Compile-time guarantees the typed path now enforces
+
+- **Wrong table** — `client.from_row::<Posts>().eq(Users::id, ...)`
+  fails to compile (the column is tied to a different `R`).
+- **Wrong value type** — `client.from_row::<Posts>().eq(Posts::view_count, "abc")`
+  fails to compile (`view_count` is `Column<Posts, i32>`).
+- **`is_null` on a non-nullable column** — `is_null(Posts::status)`
+  fails to compile when `status` is `NOT NULL`; the `is_null` signature
+  requires `Column<R, Option<V>>`.
+- **`like` on a non-string column** — `like(Posts::view_count, "10%")`
+  fails to compile.
+
+#### Notes
+
+- The string-typed API (`client.from(table).eq("col", val)`) is
+  unchanged. Existing code continues to work without modification.
+- Runtime cost of `Column<R, V>` is zero — it's a `&'static str` plus
+  a phantom type.
+- `trybuild` compile-fail fixtures under `tests/trybuild/typed-columns/`
+  codify each of the compile-time checks above.
+
+## [0.4.0] - 2026-05-17
+
 ### Breaking — full removal of the pre-builder legacy API
 
 The crate now exposes a single, supabase-js-style surface. Every method

@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/typed-columns/02_eq_wrong_value_type.rs:31:32
+   |
+31 |         .eq(Posts::view_count, "abc");
+   |          --                    ^^^^^ expected `i32`, found `&str`
+   |          |
+   |          arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/postgrest/typed_builder.rs
+   |
+   |     pub fn eq<V>(mut self, col: Column<R, V>, val: V) -> Self
+   |            ^^

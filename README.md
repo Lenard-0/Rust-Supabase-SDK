@@ -9,7 +9,7 @@ An ergonomic, async Rust client for [Supabase](https://supabase.com).
 Mirrors the `supabase-js` surface area where it makes sense and pushes
 Rust-native ergonomics elsewhere:
 
-- **PostgREST** — chainable query builder + typed row queries via `from_row::<T>()`
+- **PostgREST** — chainable query builder (string-typed) **and** compile-time-checked typed queries via `from_row::<T>()` + codegen-emitted `Column<R, V>` constants
 - **Auth** — email / phone / OTP / OAuth / anonymous sign-in, account recovery, admin user management, pluggable session stores
 - **Storage** — buckets, object CRUD, signed URLs, image transforms
 - **RPC** — call Postgres functions with `rpc_call(...)`
@@ -17,11 +17,50 @@ Rust-native ergonomics elsewhere:
 - **Realtime** — websocket subscriptions to `postgres_changes`, broadcast, and presence (opt-in feature)
 - **Retry** — automatic exponential backoff on 429 / 5xx
 
+## Type safety that catches schema drift before you ship
+
+Two query paths, both first-class. Start with the string-typed builder (zero
+setup, supabase-js parity). Opt into typed columns whenever you want the
+**compiler** to reject wrong column names and wrong value types.
+
+```rust,ignore
+// String path — supabase-js parity, no codegen required
+let rows: Vec<Value> = client
+    .from("posts")
+    .select("*")
+    .eq("status", "published")
+    .gt("view_count", 100)
+    .await?;
+
+// Typed path — same query, every column + value checked at compile time
+let rows: Vec<Posts> = client
+    .from_row::<Posts>()
+    .eq(Posts::status, "published".to_string())
+    .gt(Posts::view_count, 100i32)
+    .is_null(Posts::archived)
+    .execute()
+    .await?;
+```
+
+`Posts` and its column constants (`Posts::status`, `Posts::view_count`, …) are
+emitted by `cargo supabase gen types` — re-run after a migration and any drift
+becomes a compile error. None of the following code will build:
+
+```text
+.eq(Users::id, "x")                  // ✗ wrong row type
+.eq(Posts::view_count, "abc")        // ✗ view_count is i32, not &str
+.is_null(Posts::status)              // ✗ status is NOT NULL — is_null requires Option<_>
+.like(Posts::view_count, "10%")      // ✗ like requires a string-typed column
+```
+
+Runtime cost is zero — `Column<R, V>` is a `&'static str` plus a phantom type.
+[Full design and method list →](#typed-queries)
+
 ## Installation
 
 ```toml
 [dependencies]
-rust_supabase_sdk = "0.3.3"
+rust_supabase_sdk = "0.4.0"
 ```
 
 **MSRV:** Rust 1.75.
@@ -69,7 +108,7 @@ async fn main() -> rust_supabase_sdk::Result<()> {
 Enable `realtime` explicitly:
 
 ```toml
-rust_supabase_sdk = { version = "0.3.3", features = ["realtime"] }
+rust_supabase_sdk = { version = "0.4.0", features = ["realtime"] }
 ```
 
 ## Customizing the client
@@ -91,26 +130,59 @@ configured client can be passed across tasks and modules.
 
 ## Typed queries
 
-Implement `Row` for your row type (or generate it — see below) and use
-`from_row::<T>()` for end-to-end type safety:
+The string and typed paths share the same client and the same wire protocol.
+Pick per query:
+
+| Entry point | Use when | Setup |
+|---|---|---|
+| `client.from("posts")` | Ad-hoc queries, views, computed columns, JSON paths, anything codegen can't see | None |
+| `client.from_row::<Posts>()` | You want the compiler to verify column names and value types | `cargo supabase gen types` (or hand-rolled `Row` + column constants) |
+
+### Codegen output (you don't write this)
 
 ```rust,ignore
-use rust_supabase_sdk::Row;
+use rust_supabase_sdk::{postgrest::Column, Row};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Country { id: i64, name: String }
-
-impl Row for Country {
-    const TABLE: &'static str = "countries";
-    const SCHEMA: Option<&'static str> = Some("public");
-    const COLUMNS: &'static [&'static str] = &["id", "name"];
+pub struct Posts {
+    pub id: String,
+    pub status: String,
+    pub view_count: i32,
+    pub archived: Option<bool>,
 }
-
-let rows: Vec<Country> = client.from_row::<Country>()
-    .eq("region", "Europe")
-    .await?;
+impl Row for Posts {
+    const TABLE: &'static str = "posts";
+}
+#[allow(non_upper_case_globals)]
+impl Posts {
+    pub const id:         Column<Posts, String>       = Column::new("id");
+    pub const status:     Column<Posts, String>       = Column::new("status");
+    pub const view_count: Column<Posts, i32>          = Column::new("view_count");
+    pub const archived:   Column<Posts, Option<bool>> = Column::new("archived");
+}
 ```
+
+### Available filters on the typed builder
+
+`eq`, `neq`, `not_eq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `not_like`,
+`not_ilike`, `is_null`, `is_not_null`, `is_bool`, `in_`, `not_in_`, `contains`,
+`contained_by`, `overlaps`, `order`, `order_with`, `limit`, `offset`, `range`,
+`count`, `text_search`. Execution: `execute`, `execute_with_count`, `single`,
+`maybe_single`. Escape hatch: `.into_untyped()` drops to the string-typed
+`PostgrestBuilder` if you need an operation the typed surface doesn't cover.
+
+### When the compiler rejects a query
+
+| Misuse | Why |
+|---|---|
+| `eq(Users::id, "x")` inside `from_row::<Posts>()` | Column carries its row type — `Users::id` is `Column<Users, _>` |
+| `eq(Posts::view_count, "abc")` | `view_count` is `Column<Posts, i32>`, value must be `i32` |
+| `is_null(Posts::status)` | `status` is `String` (NOT NULL); `is_null` requires `Column<R, Option<V>>` |
+| `like(Posts::view_count, "10%")` | `like` only takes `Column<R, String>` |
+| `gt(Posts::status, 1i32)` | Value type must match the column's declared type |
+
+Each check is codified as a compile-fail fixture under `tests/trybuild/typed-columns/`.
 
 ## Code generation
 
