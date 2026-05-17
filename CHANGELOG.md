@@ -3,6 +3,47 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-05-17
+
+### Postgres enum codegen
+
+`cargo supabase gen types` now emits Rust enums for user-defined Postgres
+enum types instead of falling back to `String`. Fully automatic — no flags,
+no extra API calls; the variants come straight from PostgREST's existing
+OpenAPI document.
+
+#### Added
+
+- **`ColumnDef.variants`** — deserializes OpenAPI's `enum` keyword so the
+  variant list survives parsing.
+- **`EnumInfo`** + **`collect_enums`** — collects every distinct enum
+  referenced by an included table, dedupes across tables, unions
+  conflicting variant lists, and detects cross-schema name collisions.
+- **`emit_enum`** — emits one `pub enum` per enum type with
+  `Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize`,
+  plus per-variant `#[serde(rename = "...")]` whenever the original
+  Postgres label can't round-trip through the generated ident
+  (e.g. `"in progress"` → `InProgress`).
+- **`map_type_with_enums`** — resolves both scalar enum columns
+  (`status user_status` → `UserStatus`) and array-of-enum columns
+  (`tags color[]` → `Vec<Color>`); falls back to `String` if the
+  referenced enum was filtered out via `--only` / `--exclude` so codegen
+  never panics on missing data.
+- **Cross-schema collision handling** — when two schemas expose enums
+  with the same simple name (e.g. `public.status` and `audit.status`),
+  both fall back to fully-qualified Rust names (`PublicStatus`,
+  `AuditStatus`) to stay distinct.
+
+#### Behaviour
+
+- Enum declarations are emitted **before** the structs that reference
+  them, so the generated file compiles in a single pass.
+- A given enum is emitted **exactly once**, even when referenced by
+  many tables.
+- Field types and typed column constants both pick up the new enum
+  types, so the existing typed-builder API gets `.eq(UserStatus::Active)`
+  instead of `.eq("active")`.
+
 ## [0.4.0] - 2026-05-17
 
 ### Type-safe column references — `Column<R, V>` + `TypedBuilder<R>`

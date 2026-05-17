@@ -60,7 +60,7 @@ Runtime cost is zero — `Column<R, V>` is a `&'static str` plus a phantom type.
 
 ```toml
 [dependencies]
-rust_supabase_sdk = "0.4.0"
+rust_supabase_sdk = "0.4.1"
 ```
 
 **MSRV:** Rust 1.75.
@@ -108,7 +108,7 @@ async fn main() -> rust_supabase_sdk::Result<()> {
 Enable `realtime` explicitly:
 
 ```toml
-rust_supabase_sdk = { version = "0.4.0", features = ["realtime"] }
+rust_supabase_sdk = { version = "0.4.1", features = ["realtime"] }
 ```
 
 ## Customizing the client

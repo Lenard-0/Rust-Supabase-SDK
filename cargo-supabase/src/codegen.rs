@@ -48,6 +48,22 @@ pub struct ColumnDef {
     pub kind: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// OpenAPI `enum` keyword — PostgREST emits this for columns whose Postgres
+    /// type is a user-defined enum. Element-level for arrays of enum.
+    #[serde(default, rename = "enum")]
+    pub variants: Option<Vec<String>>,
+}
+
+/// Resolved Postgres enum, after de-duping by `format` name across all tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumInfo {
+    /// Original PostgREST format string, e.g. `"public.user_status"`.
+    pub format: String,
+    /// Generated Rust type name, e.g. `UserStatus` (or `PublicUserStatus` on
+    /// cross-schema collision).
+    pub rust_name: String,
+    /// Variant labels exactly as Postgres reports them, in declaration order.
+    pub variants: Vec<String>,
 }
 
 /// Codegen settings, surfaced as CLI flags.
@@ -96,10 +112,134 @@ pub fn emit(api: &OpenApi, opts: &Options) -> String {
         .collect();
     tables.sort_by(|a, b| a.0.cmp(b.0));
 
-    for (table_name, def) in tables {
-        emit_table(&mut out, &opts.schema, table_name, def, opts);
+    // Collect every distinct Postgres enum referenced by an included table,
+    // emit a single Rust enum per format up-front, then thread the map into
+    // table emission so column types resolve to the enum name.
+    let enums = collect_enums(&tables, opts);
+    for info in enums.values() {
+        emit_enum(&mut out, info);
     }
 
+    for (table_name, def) in tables {
+        emit_table(&mut out, &opts.schema, table_name, def, opts, &enums);
+    }
+
+    out
+}
+
+/// Walk every column in the included tables, group enum columns by their
+/// PostgREST `format` string, and pick a Rust type name for each. When two
+/// schemas expose enums with the same simple name (e.g. `public.status` vs
+/// `audit.status`), we fall back to fully-qualified PascalCase so they don't
+/// collide.
+fn collect_enums(
+    tables: &[(&String, &TableDef)],
+    opts: &Options,
+) -> BTreeMap<String, EnumInfo> {
+    // Group variants by `format`. First non-empty list wins; subsequent
+    // identical lists are ignored. Conflicting lists for the same format are
+    // unioned (declaration order from the first occurrence is preserved, then
+    // any new labels appended) so we never silently drop a value.
+    let mut by_format: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (_, def) in tables {
+        for col in def.properties.values() {
+            let Some(fmt) = col.format.as_ref() else { continue };
+            let Some(vars) = col.variants.as_ref() else { continue };
+            if vars.is_empty() {
+                continue;
+            }
+            let entry = by_format.entry(fmt.clone()).or_default();
+            if entry.is_empty() {
+                entry.extend(vars.iter().cloned());
+            } else {
+                for v in vars {
+                    if !entry.iter().any(|e| e == v) {
+                        entry.push(v.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Compute each format's *candidate* Rust name from the last `.`-segment of
+    // its format string (so `public.user_status` and `audit.user_status` both
+    // produce `UserStatus`). Any candidate shared by ≥2 formats falls back to
+    // a fully-qualified name (`Schema_Type`) so both sides remain distinct.
+    let _ = opts; // schema is no longer used here, but kept in the signature
+                  // for future opts-driven naming overrides.
+    let mut candidate_for: BTreeMap<String, String> = BTreeMap::new();
+    let mut candidate_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for fmt in by_format.keys() {
+        let candidate = to_struct_name(last_segment(fmt));
+        *candidate_counts.entry(candidate.clone()).or_insert(0) += 1;
+        candidate_for.insert(fmt.clone(), candidate);
+    }
+
+    let mut out = BTreeMap::new();
+    for (fmt, variants) in by_format {
+        let candidate = candidate_for.get(&fmt).cloned().unwrap_or_default();
+        let collides = candidate_counts.get(&candidate).copied().unwrap_or(0) > 1;
+        let rust_name = if collides {
+            to_struct_name(&fmt.replace('.', "_"))
+        } else {
+            candidate
+        };
+        out.insert(
+            fmt.clone(),
+            EnumInfo { format: fmt, rust_name, variants },
+        );
+    }
+    out
+}
+
+/// Substring after the last `.` in a PostgREST format name —
+/// `"public.user_status"` → `"user_status"`, bare names pass through.
+fn last_segment(fmt: &str) -> &str {
+    fmt.rsplit('.').next().unwrap_or(fmt)
+}
+
+fn emit_enum(out: &mut String, info: &EnumInfo) {
+    out.push_str(&format!("/// Postgres enum `{}`.\n", info.format));
+    out.push_str(
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n",
+    );
+    out.push_str(&format!("pub enum {} {{\n", info.rust_name));
+    for label in &info.variants {
+        let variant = to_variant_name(label);
+        if variant != *label {
+            out.push_str(&format!("    #[serde(rename = \"{label}\")]\n"));
+        }
+        out.push_str(&format!("    {variant},\n"));
+    }
+    out.push_str("}\n\n");
+}
+
+/// Sanitize an enum label into a valid Rust variant ident in PascalCase.
+/// Non-alphanumeric chars split words; empty / digit-leading labels get a
+/// leading underscore so they remain valid idents.
+fn to_variant_name(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    let mut capitalize = true;
+    for ch in label.chars() {
+        if ch.is_alphanumeric() {
+            if capitalize {
+                for u in ch.to_uppercase() {
+                    out.push(u);
+                }
+                capitalize = false;
+            } else {
+                out.push(ch);
+            }
+        } else {
+            capitalize = true;
+        }
+    }
+    if out.is_empty() {
+        out.push('_');
+    }
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
     out
 }
 
@@ -115,7 +255,14 @@ use serde::{Deserialize, Serialize};
 
 ";
 
-fn emit_table(out: &mut String, schema: &str, table: &str, def: &TableDef, opts: &Options) {
+fn emit_table(
+    out: &mut String,
+    schema: &str,
+    table: &str,
+    def: &TableDef,
+    opts: &Options,
+    enums: &BTreeMap<String, EnumInfo>,
+) {
     let struct_name = to_struct_name(table);
 
     out.push_str(&format!("/// Row of `{schema}.{table}`.\n"));
@@ -127,7 +274,7 @@ fn emit_table(out: &mut String, schema: &str, table: &str, def: &TableDef, opts:
 
     let mut column_names: Vec<String> = Vec::with_capacity(columns.len());
     for (col_name, col) in &columns {
-        let rust_ty = map_type(col, opts);
+        let rust_ty = map_type_with_enums(col, opts, enums);
         let optional = !def.required.iter().any(|r| r == *col_name);
         let final_ty = if optional {
             format!("Option<{rust_ty}>")
@@ -178,7 +325,7 @@ fn emit_table(out: &mut String, schema: &str, table: &str, def: &TableDef, opts:
         "#[allow(non_upper_case_globals)]\nimpl {struct_name} {{\n"
     ));
     for (col_name, col) in &columns {
-        let rust_ty = map_type(col, opts);
+        let rust_ty = map_type_with_enums(col, opts, enums);
         let optional = !def.required.iter().any(|r| r == *col_name);
         let final_ty = if optional {
             format!("Option<{rust_ty}>")
@@ -193,19 +340,42 @@ fn emit_table(out: &mut String, schema: &str, table: &str, def: &TableDef, opts:
     out.push_str("}\n\n");
 }
 
-/// Map a PostgREST column descriptor to a Rust type name.
+/// Map a PostgREST column descriptor to a Rust type name. Equivalent to
+/// [`map_type_with_enums`] with an empty enum map — retained for tests and
+/// downstream callers that don't care about enum resolution.
+#[cfg(test)]
 fn map_type(col: &ColumnDef, opts: &Options) -> String {
+    map_type_with_enums(col, opts, &BTreeMap::new())
+}
+
+/// Map a PostgREST column descriptor to a Rust type name, consulting the
+/// pre-collected enum table for any `format` we recognized as a user-defined
+/// Postgres enum.
+fn map_type_with_enums(
+    col: &ColumnDef,
+    opts: &Options,
+    enums: &BTreeMap<String, EnumInfo>,
+) -> String {
     let fmt = col.format.as_deref().unwrap_or("").trim();
     let kind = col.kind.as_deref().unwrap_or("").trim();
 
     // Arrays — kind is "array", format describes the element type.
-    // Pass "" as the element-level `kind` so that the string-type guard
-    // (`kind == "string"`) does not prevent "text", "varchar" etc. from
-    // resolving correctly inside the element.
     if kind == "array" {
-        let elem_fmt = fmt;
-        let inner = map_scalar_format(elem_fmt, "string", opts);
+        // Array of enum: PostgREST keeps the element's enum format in `format`,
+        // even though the variant list lives at the array-column level.
+        if let Some(info) = enums.get(fmt) {
+            return format!("Vec<{}>", info.rust_name);
+        }
+        // Pass "" as the element-level `kind` so that the string-type guard
+        // (`kind == "string"`) does not prevent "text", "varchar" etc. from
+        // resolving correctly inside the element.
+        let inner = map_scalar_format(fmt, "string", opts);
         return format!("Vec<{inner}>");
+    }
+
+    // Scalar enum column.
+    if let Some(info) = enums.get(fmt) {
+        return info.rust_name.clone();
     }
 
     map_scalar_format(fmt, kind, opts)
@@ -433,6 +603,7 @@ mod tests {
             format: Some("timestamp with time zone".into()),
             kind: Some("string".into()),
             description: None,
+            variants: None,
         };
         let opts = Options { chrono: true, ..Options::default() };
         assert_eq!(map_type(&col, &opts), "chrono::DateTime<chrono::Utc>");
@@ -447,6 +618,7 @@ mod tests {
             format: Some("uuid".into()),
             kind: Some("string".into()),
             description: None,
+            variants: None,
         };
         let off = Options::default();
         assert_eq!(map_type(&col, &off), "String");
@@ -587,6 +759,7 @@ mod tests {
             format: if format.is_empty() { None } else { Some(format.to_string()) },
             kind: if kind.is_empty() { None } else { Some(kind.to_string()) },
             description: None,
+            variants: None,
         }
     }
 
@@ -719,6 +892,7 @@ mod tests {
             format: Some("integer".into()),
             kind: Some("array".into()),
             description: None,
+            variants: None,
         };
         assert_eq!(map_type(&col, &opts_default()), "Vec<i32>");
     }
@@ -729,6 +903,7 @@ mod tests {
             format: Some("text".into()),
             kind: Some("array".into()),
             description: None,
+            variants: None,
         };
         assert_eq!(map_type(&col, &opts_default()), "Vec<String>");
     }
@@ -739,6 +914,7 @@ mod tests {
             format: Some("uuid".into()),
             kind: Some("array".into()),
             description: None,
+            variants: None,
         };
         assert_eq!(map_type(&col, &opts_uuid()), "Vec<uuid::Uuid>");
     }
@@ -825,6 +1001,7 @@ mod tests {
                             format: Some("integer".into()),
                             kind: Some("integer".into()),
                             description: Some("Primary key".into()),
+                            variants: None,
                         });
                         p
                     },
@@ -982,5 +1159,556 @@ mod tests {
             out.contains("use rust_supabase_sdk::{postgrest::Column, Row};"),
             "expected Column to be imported in the header:\n{out}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Enum codegen
+    // -----------------------------------------------------------------------
+
+    fn enum_col(format: &str, variants: &[&str]) -> ColumnDef {
+        ColumnDef {
+            format: Some(format.to_string()),
+            kind: Some("string".to_string()),
+            description: None,
+            variants: Some(variants.iter().map(|v| (*v).to_string()).collect()),
+        }
+    }
+
+    fn enum_array_col(format: &str, variants: &[&str]) -> ColumnDef {
+        ColumnDef {
+            format: Some(format.to_string()),
+            kind: Some("array".to_string()),
+            description: None,
+            variants: Some(variants.iter().map(|v| (*v).to_string()).collect()),
+        }
+    }
+
+    fn fixture_with_enums() -> OpenApi {
+        let json = serde_json::json!({
+            "definitions": {
+                "posts": {
+                    "required": ["id", "status"],
+                    "properties": {
+                        "id":     { "format": "uuid", "type": "string" },
+                        "status": {
+                            "format": "public.post_status",
+                            "type": "string",
+                            "enum": ["draft", "published", "archived"]
+                        },
+                        "tags":   {
+                            "format": "public.color",
+                            "type": "array",
+                            "enum": ["red", "green", "blue"]
+                        }
+                    }
+                },
+                "comments": {
+                    "required": [],
+                    "properties": {
+                        "id":     { "format": "uuid", "type": "string" },
+                        // Same enum reused on a second table — must not duplicate.
+                        "status": {
+                            "format": "public.post_status",
+                            "type": "string",
+                            "enum": ["draft", "published", "archived"]
+                        }
+                    }
+                }
+            }
+        });
+        serde_json::from_value(json).unwrap()
+    }
+
+    // ---- ColumnDef deserialization of `enum` ----
+
+    #[test]
+    fn column_def_parses_enum_field() {
+        let v = serde_json::json!({
+            "format": "public.status",
+            "type": "string",
+            "enum": ["a", "b", "c"]
+        });
+        let c: ColumnDef = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            c.variants.as_deref().map(|v| v.to_vec()),
+            Some(vec!["a".into(), "b".into(), "c".into()])
+        );
+    }
+
+    #[test]
+    fn column_def_enum_field_defaults_none() {
+        let v = serde_json::json!({ "format": "text", "type": "string" });
+        let c: ColumnDef = serde_json::from_value(v).unwrap();
+        assert!(c.variants.is_none());
+    }
+
+    // ---- last_segment ----
+
+    #[test]
+    fn last_segment_strips_schema_prefix() {
+        assert_eq!(last_segment("public.user_status"), "user_status");
+        assert_eq!(last_segment("audit.user_status"), "user_status");
+    }
+
+    #[test]
+    fn last_segment_takes_only_after_final_dot() {
+        // Defensive — PostgREST formats don't currently nest, but if they ever
+        // do we still want the leaf segment.
+        assert_eq!(last_segment("a.b.c"), "c");
+    }
+
+    #[test]
+    fn last_segment_no_dot_passes_through() {
+        assert_eq!(last_segment("user_status"), "user_status");
+    }
+
+    #[test]
+    fn last_segment_empty_input_is_empty() {
+        assert_eq!(last_segment(""), "");
+    }
+
+    // ---- to_variant_name ----
+
+    #[test]
+    fn variant_name_simple_label() {
+        assert_eq!(to_variant_name("active"), "Active");
+        assert_eq!(to_variant_name("draft"), "Draft");
+    }
+
+    #[test]
+    fn variant_name_snake_case_label() {
+        assert_eq!(to_variant_name("in_progress"), "InProgress");
+        assert_eq!(to_variant_name("not_started_yet"), "NotStartedYet");
+    }
+
+    #[test]
+    fn variant_name_with_hyphens_and_spaces() {
+        assert_eq!(to_variant_name("on-hold"), "OnHold");
+        assert_eq!(to_variant_name("in progress"), "InProgress");
+        assert_eq!(to_variant_name("very-long phrase_here"), "VeryLongPhraseHere");
+    }
+
+    #[test]
+    fn variant_name_leading_digit_gets_underscore() {
+        assert_eq!(to_variant_name("404"), "_404");
+        assert_eq!(to_variant_name("2nd_place"), "_2ndPlace");
+    }
+
+    #[test]
+    fn variant_name_empty_becomes_underscore() {
+        assert_eq!(to_variant_name(""), "_");
+        assert_eq!(to_variant_name("---"), "_");
+    }
+
+    #[test]
+    fn variant_name_unicode_preserved() {
+        // Unicode alphanumerics survive; punctuation splits words.
+        assert_eq!(to_variant_name("café"), "Café");
+    }
+
+    // ---- collect_enums ----
+
+    #[test]
+    fn collect_enums_dedupes_same_format_across_tables() {
+        let api = fixture_with_enums();
+        let tables: Vec<_> = api.definitions.iter().collect();
+        let enums = collect_enums(&tables, &Options::default());
+        // post_status referenced by two tables → still only one entry.
+        assert_eq!(enums.len(), 2, "expected post_status + color enums, got: {enums:?}");
+        let post = enums.get("public.post_status").expect("post_status missing");
+        assert_eq!(post.rust_name, "PostStatus");
+        assert_eq!(post.variants, vec!["draft", "published", "archived"]);
+    }
+
+    #[test]
+    fn collect_enums_collision_uses_qualified_name() {
+        let json = serde_json::json!({
+            "definitions": {
+                "t1": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.status", "type": "string", "enum": ["a"] }
+                    }
+                },
+                "t2": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "audit.status",  "type": "string", "enum": ["b"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let tables: Vec<_> = api.definitions.iter().collect();
+        let enums = collect_enums(&tables, &Options::default());
+        assert_eq!(enums.get("public.status").unwrap().rust_name, "PublicStatus");
+        assert_eq!(enums.get("audit.status").unwrap().rust_name, "AuditStatus");
+    }
+
+    #[test]
+    fn collect_enums_skips_columns_with_no_format() {
+        let json = serde_json::json!({
+            "definitions": {
+                "t": {
+                    "required": [],
+                    "properties": {
+                        // No `format` field → cannot key the enum; should be ignored.
+                        "x": { "type": "string", "enum": ["a"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let tables: Vec<_> = api.definitions.iter().collect();
+        let enums = collect_enums(&tables, &Options::default());
+        assert!(enums.is_empty());
+    }
+
+    #[test]
+    fn collect_enums_skips_empty_variants() {
+        let json = serde_json::json!({
+            "definitions": {
+                "t": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.s", "type": "string", "enum": [] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let tables: Vec<_> = api.definitions.iter().collect();
+        let enums = collect_enums(&tables, &Options::default());
+        assert!(enums.is_empty());
+    }
+
+    #[test]
+    fn collect_enums_unions_conflicting_variant_lists() {
+        // Realistically the same Postgres enum should always have the same
+        // variants, but if PostgREST ever disagrees we union rather than drop.
+        let json = serde_json::json!({
+            "definitions": {
+                "a": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.s", "type": "string", "enum": ["one", "two"] }
+                    }
+                },
+                "b": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.s", "type": "string", "enum": ["two", "three"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let tables: Vec<_> = api.definitions.iter().collect();
+        let enums = collect_enums(&tables, &Options::default());
+        let s = enums.get("public.s").unwrap();
+        assert_eq!(s.variants, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn collect_enums_respects_table_filter() {
+        // `only` filter is applied *before* enum collection — enums only
+        // referenced by excluded tables should not be emitted.
+        let json = serde_json::json!({
+            "definitions": {
+                "kept": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.kept_enum", "type": "string", "enum": ["a"] }
+                    }
+                },
+                "dropped": {
+                    "required": [],
+                    "properties": {
+                        "x": { "format": "public.dropped_enum", "type": "string", "enum": ["b"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let opts = Options { only: vec!["kept".into()], ..Options::default() };
+        let out = emit(&api, &opts);
+        assert!(out.contains("pub enum KeptEnum"), "kept_enum should be emitted:\n{out}");
+        assert!(
+            !out.contains("pub enum DroppedEnum"),
+            "dropped_enum must not leak via excluded table:\n{out}"
+        );
+    }
+
+    // ---- emit_enum ----
+
+    #[test]
+    fn emit_enum_basic_block() {
+        let info = EnumInfo {
+            format: "public.post_status".into(),
+            rust_name: "PostStatus".into(),
+            variants: vec!["draft".into(), "published".into()],
+        };
+        let mut out = String::new();
+        emit_enum(&mut out, &info);
+        assert!(out.contains("/// Postgres enum `public.post_status`."));
+        assert!(out.contains("pub enum PostStatus {"));
+        assert!(out.contains("Draft,"));
+        assert!(out.contains("Published,"));
+    }
+
+    #[test]
+    fn emit_enum_derives_include_serde_and_copy() {
+        let info = EnumInfo {
+            format: "public.s".into(),
+            rust_name: "S".into(),
+            variants: vec!["a".into()],
+        };
+        let mut out = String::new();
+        emit_enum(&mut out, &info);
+        // All the derives we rely on for filter ergonomics + JSON round-trip.
+        for d in ["Debug", "Clone", "Copy", "PartialEq", "Eq", "Hash", "Serialize", "Deserialize"] {
+            assert!(out.contains(d), "missing derive `{d}` in:\n{out}");
+        }
+    }
+
+    #[test]
+    fn emit_enum_serde_rename_only_when_label_differs_from_variant_ident() {
+        let info = EnumInfo {
+            format: "public.s".into(),
+            rust_name: "S".into(),
+            // "Active" round-trips as-is (variant ident is also "Active");
+            // "in progress" requires a rename to preserve the original label.
+            variants: vec!["Active".into(), "in progress".into()],
+        };
+        let mut out = String::new();
+        emit_enum(&mut out, &info);
+        assert!(out.contains("#[serde(rename = \"in progress\")]"));
+        assert!(out.contains("InProgress,"));
+        assert!(
+            !out.contains("#[serde(rename = \"Active\")]"),
+            "no rename should be emitted when label already matches the ident:\n{out}"
+        );
+        assert!(out.contains("Active,"));
+    }
+
+    #[test]
+    fn emit_enum_preserves_variant_declaration_order() {
+        let info = EnumInfo {
+            format: "f".into(),
+            rust_name: "F".into(),
+            variants: vec!["zzz".into(), "aaa".into(), "mmm".into()],
+        };
+        let mut out = String::new();
+        emit_enum(&mut out, &info);
+        let z = out.find("Zzz").unwrap();
+        let a = out.find("Aaa").unwrap();
+        let m = out.find("Mmm").unwrap();
+        assert!(z < a && a < m, "variants must preserve Postgres declaration order");
+    }
+
+    // ---- map_type_with_enums ----
+
+    #[test]
+    fn map_type_with_enums_resolves_scalar_enum() {
+        let mut enums = BTreeMap::new();
+        enums.insert("public.post_status".into(), EnumInfo {
+            format: "public.post_status".into(),
+            rust_name: "PostStatus".into(),
+            variants: vec!["draft".into()],
+        });
+        let col = enum_col("public.post_status", &["draft"]);
+        assert_eq!(map_type_with_enums(&col, &Options::default(), &enums), "PostStatus");
+    }
+
+    #[test]
+    fn map_type_with_enums_resolves_enum_array() {
+        let mut enums = BTreeMap::new();
+        enums.insert("public.color".into(), EnumInfo {
+            format: "public.color".into(),
+            rust_name: "Color".into(),
+            variants: vec!["red".into()],
+        });
+        let col = enum_array_col("public.color", &["red"]);
+        assert_eq!(map_type_with_enums(&col, &Options::default(), &enums), "Vec<Color>");
+    }
+
+    #[test]
+    fn map_type_with_enums_falls_back_to_string_when_not_collected() {
+        // Column has variants in OpenAPI but the format wasn't registered in
+        // the enum map (e.g. because the table was filtered out). The mapper
+        // must not panic and must produce a usable scalar type.
+        let enums = BTreeMap::new();
+        let col = enum_col("public.post_status", &["draft"]);
+        assert_eq!(map_type_with_enums(&col, &Options::default(), &enums), "String");
+    }
+
+    #[test]
+    fn map_type_2arg_wrapper_ignores_enums_for_back_compat() {
+        // The old 2-arg `map_type` still produces `String` for enum columns —
+        // because it sees an empty map. This is what keeps the existing
+        // map_type tests valid.
+        let col = enum_col("public.s", &["a", "b"]);
+        assert_eq!(map_type(&col, &Options::default()), "String");
+    }
+
+    // ---- End-to-end emit() integration ----
+
+    #[test]
+    fn emit_writes_enum_before_structs_that_use_it() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        let enum_pos = out.find("pub enum PostStatus").expect("PostStatus enum missing");
+        let struct_pos = out.find("pub struct Posts").expect("Posts struct missing");
+        assert!(
+            enum_pos < struct_pos,
+            "enum decl must precede the structs that reference it"
+        );
+    }
+
+    #[test]
+    fn emit_emits_each_enum_once_even_when_referenced_twice() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        let n = out.matches("pub enum PostStatus").count();
+        assert_eq!(n, 1, "PostStatus referenced by two tables; should only declare once:\n{out}");
+    }
+
+    #[test]
+    fn emit_uses_enum_in_struct_field_required() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        // `status` is in `required` for posts → bare PostStatus, not Option.
+        assert!(
+            out.contains("pub status: PostStatus,"),
+            "expected required enum column to be bare type:\n{out}"
+        );
+    }
+
+    #[test]
+    fn emit_uses_enum_in_struct_field_optional() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        // `status` is NOT in required for comments → Option<PostStatus>.
+        // Comments comes first alphabetically, so search the comments block.
+        let comments_start = out.find("pub struct Comments").unwrap();
+        let comments_end = out[comments_start..]
+            .find("\n}\n")
+            .map(|i| comments_start + i)
+            .unwrap();
+        let comments_block = &out[comments_start..comments_end];
+        assert!(
+            comments_block.contains("pub status: Option<PostStatus>,"),
+            "expected optional enum on Comments:\n{comments_block}"
+        );
+    }
+
+    #[test]
+    fn emit_uses_enum_vec_for_array_column() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        assert!(
+            out.contains("pub tags: Option<Vec<Color>>,"),
+            "expected array-of-enum to become Vec<Color>:\n{out}"
+        );
+    }
+
+    #[test]
+    fn emit_typed_column_const_uses_enum_type() {
+        let out = emit(&fixture_with_enums(), &Options::default());
+        // Required → bare PostStatus on the const too.
+        assert!(
+            out.contains("pub const status: Column<Posts, PostStatus> = Column::new(\"status\");"),
+            "expected typed column const to use enum type:\n{out}"
+        );
+        // Array variant.
+        assert!(
+            out.contains("pub const tags: Column<Posts, Option<Vec<Color>>> = Column::new(\"tags\");"),
+            "expected Vec<Color> column const:\n{out}"
+        );
+    }
+
+    #[test]
+    fn emit_no_enums_when_none_declared() {
+        // Original fixture has no enum columns — header should be the only
+        // `pub enum` mention (there isn't one anywhere) and codegen still works.
+        let out = emit(&fixture(), &Options::default());
+        assert!(
+            !out.contains("pub enum "),
+            "no enum should be emitted for a schema without user enums:\n{out}"
+        );
+    }
+
+    #[test]
+    fn emit_enum_with_non_ident_label_renames_and_compiles_ident() {
+        // Real-world labels can have spaces and hyphens.
+        let json = serde_json::json!({
+            "definitions": {
+                "tickets": {
+                    "required": ["priority"],
+                    "properties": {
+                        "priority": {
+                            "format": "public.priority",
+                            "type": "string",
+                            "enum": ["low", "in progress", "high-priority"]
+                        }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let out = emit(&api, &Options::default());
+        assert!(out.contains("pub enum Priority {"));
+        assert!(out.contains("Low,"));
+        assert!(out.contains("#[serde(rename = \"in progress\")]"));
+        assert!(out.contains("InProgress,"));
+        assert!(out.contains("#[serde(rename = \"high-priority\")]"));
+        assert!(out.contains("HighPriority,"));
+    }
+
+    #[test]
+    fn emit_enum_collision_across_schemas_uses_qualified_names_end_to_end() {
+        let json = serde_json::json!({
+            "definitions": {
+                "t1": {
+                    "required": ["s"],
+                    "properties": {
+                        "s": { "format": "public.status", "type": "string", "enum": ["a"] }
+                    }
+                },
+                "t2": {
+                    "required": ["s"],
+                    "properties": {
+                        "s": { "format": "audit.status",  "type": "string", "enum": ["b"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let out = emit(&api, &Options::default());
+        assert!(out.contains("pub enum PublicStatus"));
+        assert!(out.contains("pub enum AuditStatus"));
+        // Each table's field uses the correct qualified name.
+        let t1 = out.find("pub struct T1").unwrap();
+        let t1_block = &out[t1..t1 + out[t1..].find("\n}\n").unwrap()];
+        assert!(t1_block.contains("pub s: PublicStatus,"), "T1 block:\n{t1_block}");
+        let t2 = out.find("pub struct T2").unwrap();
+        let t2_block = &out[t2..t2 + out[t2..].find("\n}\n").unwrap()];
+        assert!(t2_block.contains("pub s: AuditStatus,"), "T2 block:\n{t2_block}");
+    }
+
+    #[test]
+    fn emit_enum_uses_non_public_schema_name() {
+        // When the user runs codegen against a non-public schema, the format
+        // prefix matches and gets stripped.
+        let json = serde_json::json!({
+            "definitions": {
+                "items": {
+                    "required": ["s"],
+                    "properties": {
+                        "s": { "format": "inventory.bin_state", "type": "string", "enum": ["full"] }
+                    }
+                }
+            }
+        });
+        let api: OpenApi = serde_json::from_value(json).unwrap();
+        let opts = Options { schema: "inventory".into(), ..Options::default() };
+        let out = emit(&api, &opts);
+        assert!(out.contains("pub enum BinState"), "missing stripped enum name:\n{out}");
+        assert!(out.contains("pub s: BinState,"));
     }
 }
