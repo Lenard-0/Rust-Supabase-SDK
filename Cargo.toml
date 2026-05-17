@@ -3,12 +3,15 @@ name = "rust_supabase_sdk"
 version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
-description = "An SDK kit for SupaBase so that Rust lovers can use SupaBase with the low level abstracted away. If you want new features tell me and I'll add them."
+description = "Async Rust client for Supabase — PostgREST, Auth, Storage, Edge Functions, and Realtime. Builder-pattern API mirroring `supabase-js`, with a `cargo supabase` codegen for typed row structs."
 license = "MIT"
-authors = ["Lachy Hislop lachie.hislop@gmail.com"]
+authors = ["Lachy Hislop <lachie.hislop@gmail.com>"]
 repository = "https://github.com/Lenard-0/Rust-Supabase-SDK"
-keywords = ["supabase", "postgrest", "auth", "storage", "sdk"]
-categories = ["api-bindings", "database", "web-programming::http-client"]
+homepage = "https://github.com/Lenard-0/Rust-Supabase-SDK"
+documentation = "https://docs.rs/rust_supabase_sdk"
+readme = "README.md"
+keywords = ["supabase", "postgrest", "auth", "storage", "realtime"]
+categories = ["api-bindings", "database", "asynchronous", "web-programming::http-client"]
 
 [package.metadata.docs.rs]
 all-features = true

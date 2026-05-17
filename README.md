@@ -118,22 +118,41 @@ The companion `cargo-supabase` binary introspects a Supabase project's PostgREST
 schema and emits Rust row structs (with `Row` impls) ready for use with
 `from_row::<T>()`:
 
-```text
-cargo install cargo-supabase
+```sh
+cargo install --path cargo-supabase   # one-time
 
 cargo supabase gen types \
-    --url      $SUPABASE_URL \
-    --apikey   $SUPABASE_SERVICE_ROLE_KEY \
-    --output   src/generated.rs
+    --url    "$SUPABASE_URL" \
+    --apikey "$SUPABASE_API_KEY" \
+    --output src/db.rs
 ```
 
-The introspection endpoint requires the **service-role** key, not the anon key.
+Re-run whenever the DB schema changes — drift becomes a compile error rather than a runtime failure.
 
-Flags:
-- `--only <TABLE>` / `--exclude <TABLE>` — allow/deny lists, repeatable.
-- `--schema <NAME>` — schema label baked into generated docs (default `public`).
-- `--uuid` — emit `uuid::Uuid` for UUID columns instead of `String`.
-- `--no-chrono` — emit `String` for timestamps instead of `chrono::*`.
+See [docs/codegen.md](docs/codegen.md) for the full flag reference, type mapping table, and worked examples.
+
+## Testing
+
+Run the test suite:
+
+```sh
+cargo test
+```
+
+### Code coverage
+
+Install [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) once:
+
+```sh
+cargo install cargo-llvm-cov
+```
+
+| Command | Output |
+|---------|--------|
+| `cargo llvm-cov` | Summary in terminal |
+| `cargo llvm-cov --html` | HTML report in `target/llvm-cov/html/` |
+| `cargo llvm-cov --open` | HTML report, opened in browser |
+| `cargo llvm-cov --lcov --output-path lcov.info` | LCOV file for CI / coverage services |
 
 ## Examples
 
