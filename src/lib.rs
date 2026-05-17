@@ -102,21 +102,15 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub mod auth;
-pub mod count;
-pub mod delete;
 pub mod error;
 #[cfg(feature = "functions")]
 pub mod functions;
-pub mod get;
-pub mod insert;
 pub mod postgrest;
 #[cfg(feature = "realtime")]
 pub mod realtime;
 pub mod rpc;
-pub mod select;
 pub mod storage;
 pub mod universals;
-pub mod update;
 
 pub use auth::{
     session_store::{InMemorySessionStore, SessionStore},

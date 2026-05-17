@@ -1,74 +1,138 @@
+//! Live-DB smoke tests for the supabase-js-style builder API: insert →
+//! select → update → delete, plus upsert. Run against the project specified
+//! by `SUPABASE_URL` + `SUPABASE_API_KEY` in `.env`.
 
 #[cfg(test)]
-#[allow(deprecated)] // Legacy integration tests pinned to the pre-builder API.
+#[allow(clippy::unwrap_used)]
 mod tests {
     use dotenv::dotenv;
-    use serde_json::json;
     use rust_supabase_sdk::SupabaseClient;
+    use serde_json::{json, Value};
+    use uuid::Uuid;
 
-    #[tokio::test]
-    async fn can_initialise_supabase_client() {
-        dotenv().ok(); // Load environment variables from .env file
+    fn client() -> SupabaseClient {
+        dotenv().ok();
         SupabaseClient::new(
             std::env::var("SUPABASE_URL").unwrap(),
             std::env::var("SUPABASE_API_KEY").unwrap(),
-            None
-        );
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn can_initialise_supabase_client() {
+        let _c = client();
     }
 
     #[tokio::test]
     async fn can_create_get_update_and_remove() {
-        dotenv().ok(); // Load environment variables from .env file
-        let supabase_client = SupabaseClient::new(
-            std::env::var("SUPABASE_URL").unwrap(),
-            std::env::var("SUPABASE_API_KEY").unwrap(),
-            None
-        );
+        let c = client();
+        let run = Uuid::new_v4().to_string();
+        let name = format!("Test Org {run}");
 
-        let record_id = supabase_client.insert("organisations", json!({
-            "name": "Test Organisation"
-        })).await.unwrap();
+        // Insert and read the inserted id back.
+        let inserted: Vec<Value> = c
+            .from("organisations")
+            .insert(json!({ "name": name }))
+            .select_returning("id,name")
+            .await
+            .unwrap();
+        assert_eq!(inserted.len(), 1);
+        let record_id = inserted[0]["id"].as_str().unwrap().to_string();
 
-        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
-        assert_eq!(record["name"], "Test Organisation");
+        // Select by id.
+        let row: Value = c
+            .from("organisations")
+            .select("*")
+            .eq("id", &record_id)
+            .single()
+            .await
+            .unwrap();
+        assert_eq!(row["name"], name);
 
-        supabase_client.update("organisations", &record_id, json!({
-            "name": "Updated Organisation"
-        })).await.unwrap();
+        // Update.
+        let updated_name = format!("Updated {run}");
+        let _: Vec<Value> = c
+            .from("organisations")
+            .update(json!({ "name": &updated_name }))
+            .eq("id", &record_id)
+            .await
+            .unwrap();
 
-        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
-        assert_eq!(record["name"], "Updated Organisation");
+        let row: Value = c
+            .from("organisations")
+            .select("name")
+            .eq("id", &record_id)
+            .single()
+            .await
+            .unwrap();
+        assert_eq!(row["name"], updated_name);
 
-        supabase_client.delete("organisations", &record_id).await.unwrap();
+        // Delete.
+        let _: Vec<Value> = c
+            .from("organisations")
+            .delete()
+            .eq("id", &record_id)
+            .await
+            .unwrap();
 
-        let record = supabase_client.get_by_id("organisations", &record_id).await;
-        assert!(record.is_err());
+        let missing = c
+            .from("organisations")
+            .select("*")
+            .eq("id", &record_id)
+            .single()
+            .await;
+        assert!(missing.is_err(), "row should be gone after delete");
     }
 
     #[tokio::test]
     async fn can_upsert() {
-        dotenv().ok(); // Load environment variables from .env file
-        let supabase_client = SupabaseClient::new(
-            std::env::var("SUPABASE_URL").unwrap(),
-            std::env::var("SUPABASE_API_KEY").unwrap(),
-            None
-        );
+        let c = client();
+        let run = Uuid::new_v4().to_string();
+        let id = Uuid::new_v4().to_string();
+        let name = format!("Test Org {run}");
 
-        let record_id = supabase_client.upsert("organisations", json!({
-            "name": "Test Organisation"
-        })).await.unwrap();
+        // First upsert — inserts.
+        let _: Vec<Value> = c
+            .from("organisations")
+            .upsert(json!({ "id": &id, "name": &name }))
+            .on_conflict("id")
+            .await
+            .unwrap();
 
-        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
-        assert_eq!(record["name"], "Test Organisation");
+        let row: Value = c
+            .from("organisations")
+            .select("*")
+            .eq("id", &id)
+            .single()
+            .await
+            .unwrap();
+        assert_eq!(row["name"], name);
 
-        supabase_client.upsert("organisations", json!({
-            "id": record_id,
-            "name": "Updated Organisation"
-        })).await.unwrap();
+        // Second upsert with same id — updates.
+        let updated = format!("Updated {run}");
+        let _: Vec<Value> = c
+            .from("organisations")
+            .upsert(json!({ "id": &id, "name": &updated }))
+            .on_conflict("id")
+            .await
+            .unwrap();
 
-        let record = supabase_client.get_by_id("organisations", &record_id).await.unwrap();
-        assert_eq!(record["name"], "Updated Organisation");
+        let row: Value = c
+            .from("organisations")
+            .select("*")
+            .eq("id", &id)
+            .single()
+            .await
+            .unwrap();
+        assert_eq!(row["name"], updated);
 
-        supabase_client.delete("organisations", &record_id).await.unwrap();
+        // Cleanup.
+        let _: Vec<Value> = c
+            .from("organisations")
+            .delete()
+            .eq("id", &id)
+            .await
+            .unwrap();
     }
 }

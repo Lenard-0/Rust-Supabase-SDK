@@ -1,35 +1,32 @@
 //! Mock-server tests filling coverage gaps in modules that are otherwise
-//! exercised only via live integration (or not at all):
+//! exercised only via live integration:
 //!
 //!   * `src/rpc.rs` — `rpc_call`
-//!   * `src/count.rs` — legacy `count` (Content-Range parsing)
-//!   * `src/auth/users.rs` — legacy `get_all_users`, `get_user_by_id`
-//!   * `src/auth/recover.rs` — legacy `forgot_password`, `reset_password`
 //!   * `src/functions/mod.rs` — `invoke`, `invoke_with`, `invoke_stream`, all
 //!     body variants, region header, JSON/text/bytes/form
 //!   * `src/auth/mod.rs` — sign_up, verify_otp, resend, sign_in_with_id_token,
 //!     exchange_code_for_session, reset_password_for_email, refresh_session,
 //!     sign_in_with_otp paths
-//!   * `src/universals/mod.rs` — `request_bytes` 429 retry + RetryExhausted
-//!     edge, request_full Content-Range parsing
-//!   * `src/auth/admin.rs` — invite_user_by_email, generate_link
+//!   * `src/universals/mod.rs` — `request_bytes` 429 retry, empty / malformed
+//!     body, error decoding
+//!   * `src/auth/admin.rs` — invite_user_by_email, generate_link, list_users
+//!   * `src/postgrest/builder.rs` — execute-path variants (bare object, null,
+//!     decode errors, IntoFuture await, maybe_single multi-row)
 //!
 //! Mocks let us drive every branch deterministically without needing a live
-//! project that's been pre-configured with edge functions, OTP, OAuth, etc.
+//! project pre-configured with edge functions, OTP, OAuth, etc.
 
 #![allow(clippy::unwrap_used)]
-#![allow(deprecated)]
 
 use std::time::Duration;
 
 use rust_supabase_sdk::auth::{
     OtpRecipient, OtpType, OAuthOptions, OtpOptions, SignOutScope,
-    SignUpRequest, UpdateUserAttributes, VerifyOtpParams, ResetPasswordOptions,
+    UpdateUserAttributes, VerifyOtpParams, ResetPasswordOptions,
 };
 use rust_supabase_sdk::functions::{
     FunctionRegion, InvokeMethod, InvokeOptions,
 };
-use rust_supabase_sdk::select::SelectQuery;
 use rust_supabase_sdk::storage::UploadOptions;
 use rust_supabase_sdk::{RetryConfig, SupabaseClient, SupabaseError};
 use serde_json::{json, Value};
@@ -91,183 +88,6 @@ async fn rpc_call_propagates_server_error() {
     assert!(matches!(err, SupabaseError::Postgrest(_)));
 }
 
-// ===========================================================================
-// count.rs (legacy)
-// ===========================================================================
-
-#[tokio::test]
-async fn count_parses_content_range_total() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/rest/v1/things"))
-        .respond_with(
-            ResponseTemplate::new(206)
-                .insert_header("content-range", "0-9/137")
-                .set_body_json(json!([])),
-        )
-        .mount(&server)
-        .await;
-    let n = client(&server).count("things", SelectQuery::new()).await.unwrap();
-    assert_eq!(n, 137);
-}
-
-#[tokio::test]
-async fn count_missing_content_range_yields_unexpected() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/rest/v1/things"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-        .mount(&server)
-        .await;
-    let err = client(&server).count("things", SelectQuery::new()).await.unwrap_err();
-    match err {
-        SupabaseError::Unexpected(msg) => assert!(msg.contains("Content-Range"), "msg={msg}"),
-        other => panic!("expected Unexpected, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn count_malformed_content_range_yields_unexpected() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/rest/v1/things"))
-        .respond_with(
-            ResponseTemplate::new(206)
-                .insert_header("content-range", "no-slash-here")
-                .set_body_json(json!([])),
-        )
-        .mount(&server)
-        .await;
-    let err = client(&server).count("things", SelectQuery::new()).await.unwrap_err();
-    assert!(matches!(err, SupabaseError::Unexpected(_)));
-}
-
-#[tokio::test]
-async fn count_unparseable_total_yields_unexpected() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/rest/v1/things"))
-        .respond_with(
-            ResponseTemplate::new(206)
-                .insert_header("content-range", "0-9/notanumber")
-                .set_body_json(json!([])),
-        )
-        .mount(&server)
-        .await;
-    let err = client(&server).count("things", SelectQuery::new()).await.unwrap_err();
-    assert!(matches!(err, SupabaseError::Unexpected(_)));
-}
-
-// ===========================================================================
-// auth/users.rs (legacy)
-// ===========================================================================
-
-#[tokio::test]
-async fn legacy_get_all_users_extracts_users_field() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/admin/users"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "users": [{
-                "id": "u1", "email": "a@b.co",
-                "created_at": "2024-01-01T00:00:00Z"
-            }]
-        })))
-        .mount(&server)
-        .await;
-    let users = client(&server).get_all_users().await.unwrap();
-    assert_eq!(users.len(), 1);
-    assert_eq!(users[0].id, "u1");
-}
-
-#[tokio::test]
-async fn legacy_get_all_users_missing_field_yields_unexpected() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/admin/users"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-        .mount(&server)
-        .await;
-    let err = client(&server).get_all_users().await.unwrap_err();
-    assert!(matches!(err, SupabaseError::Unexpected(_)));
-}
-
-#[tokio::test]
-async fn legacy_get_all_users_bad_payload_decodes_to_error() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/admin/users"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "users": "not an array"
-        })))
-        .mount(&server)
-        .await;
-    let err = client(&server).get_all_users().await.unwrap_err();
-    assert!(matches!(err, SupabaseError::Decode { .. }));
-}
-
-#[tokio::test]
-async fn legacy_get_user_by_id_returns_user() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/admin/users/u1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "u1", "email": "a@b.co", "created_at": "2024-01-01T00:00:00Z"
-        })))
-        .mount(&server)
-        .await;
-    let u = client(&server).get_user_by_id("u1").await.unwrap();
-    assert_eq!(u.id, "u1");
-}
-
-#[tokio::test]
-async fn legacy_get_user_by_id_decode_failure_path() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/admin/users/u1"))
-        // Missing `id` field — required by SupabaseUser.
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"email": "x"})))
-        .mount(&server)
-        .await;
-    let err = client(&server).get_user_by_id("u1").await.unwrap_err();
-    assert!(matches!(err, SupabaseError::Decode { .. }));
-}
-
-// ===========================================================================
-// auth/recover.rs (legacy)
-// ===========================================================================
-
-#[tokio::test]
-async fn legacy_forgot_password_posts_email() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/recover"))
-        .and(body_json(json!({"email": "a@b.co"})))
-        .respond_with(ResponseTemplate::new(200).set_body_string(""))
-        .expect(1)
-        .mount(&server)
-        .await;
-    client(&server).forgot_password("a@b.co").await.unwrap();
-    server.verify().await;
-}
-
-#[tokio::test]
-async fn legacy_reset_password_puts_user_with_access_token() {
-    let server = MockServer::start().await;
-    Mock::given(method("PUT"))
-        .and(path("/auth/v1/user"))
-        .and(header("authorization", "Bearer reset-token"))
-        .and(body_json(json!({"password": "new-pw", "code": "999"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "u1"})))
-        .expect(1)
-        .mount(&server)
-        .await;
-    client(&server)
-        .reset_password("new-pw", "reset-token", "999")
-        .await
-        .unwrap();
-    server.verify().await;
-}
 
 // ===========================================================================
 // functions/mod.rs — invoke pathways
@@ -1456,60 +1276,6 @@ async fn admin_list_users_empty_body_returns_empty_list() {
     assert!(p.users.is_empty());
 }
 
-#[tokio::test]
-async fn auth_sign_up_request_legacy_wrapper() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/signup"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "t", "token_type": "bearer",
-            "expires_in": 3600, "refresh_token": "rt",
-            "user": {"id": "u1"}
-        })))
-        .mount(&server)
-        .await;
-    let r = client(&server)
-        .sign_up(SignUpRequest {
-            email: "a@b.co".into(),
-            password: "pw".into(),
-            user_id: None,
-            name: Some("Alice".into()),
-        })
-        .await
-        .unwrap();
-    assert_eq!(r.access_token, "t");
-}
-
-#[tokio::test]
-async fn auth_sign_in_legacy_wrapper() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/token"))
-        .and(query_param("grant_type", "password"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "t", "token_type": "bearer",
-            "expires_in": 3600, "refresh_token": "rt",
-            "user": {"id": "u1"}
-        })))
-        .mount(&server)
-        .await;
-    let r = client(&server).sign_in("a@b.co", "pw").await.unwrap();
-    assert_eq!(r.access_token, "t");
-}
-
-#[tokio::test]
-async fn auth_get_user_legacy_wrapper() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/auth/v1/user"))
-        .and(header("authorization", "Bearer override-tok"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "u1"})))
-        .mount(&server)
-        .await;
-    let v = client(&server).get_user("override-tok").await.unwrap();
-    assert_eq!(v["id"], "u1");
-}
-
 // ===========================================================================
 // postgrest/builder.rs — execute path variants (object, null, decode err)
 // ===========================================================================
@@ -1792,96 +1558,3 @@ async fn auth_token_response_decode_error_in_parse_session() {
     assert!(matches!(err, SupabaseError::Decode { .. }));
 }
 
-#[tokio::test]
-async fn legacy_sign_up_with_user_id() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/signup"))
-        .and(body_json(json!({
-            "email": "a@b.co",
-            "password": "pw",
-            "data": {"name": "Alice"},
-            "user_id": "preset-id"
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "t", "token_type": "bearer",
-            "expires_in": 3600, "refresh_token": "rt",
-            "user": {"id": "u1"}
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    client(&server)
-        .sign_up(SignUpRequest {
-            email: "a@b.co".into(),
-            password: "pw".into(),
-            user_id: Some("preset-id".into()),
-            name: Some("Alice".into()),
-        })
-        .await
-        .unwrap();
-    server.verify().await;
-}
-
-#[tokio::test]
-async fn legacy_sign_up_with_error_in_body() {
-    // decode_legacy_auth_response error-detection path.
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/signup"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "error_code": "user_already_exists",
-            "msg": "User already registered"
-        })))
-        .mount(&server)
-        .await;
-    let err = client(&server)
-        .sign_up(SignUpRequest {
-            email: "x@y.co".into(),
-            password: "pw".into(),
-            user_id: None,
-            name: None,
-        })
-        .await
-        .unwrap_err();
-    match err {
-        SupabaseError::Auth(ae) => {
-            assert_eq!(ae.error_code.as_deref(), Some("user_already_exists"));
-        }
-        other => panic!("expected Auth error, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn legacy_sign_up_decode_failure_path() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/auth/v1/signup"))
-        // Missing fields required by AuthResponse — decode should fail.
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"random": 1})))
-        .mount(&server)
-        .await;
-    let err = client(&server)
-        .sign_up(SignUpRequest {
-            email: "x@y.co".into(),
-            password: "pw".into(),
-            user_id: None,
-            name: None,
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(err, SupabaseError::Decode { .. }));
-}
-
-#[tokio::test]
-async fn auth_delete_user_legacy_wrapper() {
-    let server = MockServer::start().await;
-    Mock::given(method("DELETE"))
-        .and(path("/auth/v1/admin/users/u1"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(""))
-        .expect(1)
-        .mount(&server)
-        .await;
-    client(&server).delete_user("u1").await.unwrap();
-    server.verify().await;
-}

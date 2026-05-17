@@ -21,7 +21,7 @@ Rust-native ergonomics elsewhere:
 
 ```toml
 [dependencies]
-rust_supabase_sdk = "0.3"
+rust_supabase_sdk = "0.4"
 ```
 
 **MSRV:** Rust 1.75.
@@ -69,7 +69,7 @@ async fn main() -> rust_supabase_sdk::Result<()> {
 Enable `realtime` explicitly:
 
 ```toml
-rust_supabase_sdk = { version = "0.3", features = ["realtime"] }
+rust_supabase_sdk = { version = "0.4", features = ["realtime"] }
 ```
 
 ## Customizing the client

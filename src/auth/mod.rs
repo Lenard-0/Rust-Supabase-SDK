@@ -16,7 +16,6 @@
 //! [`SessionStore`](crate::SessionStore), so subsequent PostgREST and Storage
 //! requests automatically use the user's access token.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{AuthError, Result, SupabaseError};
@@ -25,10 +24,8 @@ use crate::SupabaseClient;
 
 pub mod admin;
 pub mod oauth;
-pub mod recover;
 pub mod session_store;
 pub mod types;
-pub mod users;
 
 pub use admin::AuthAdmin;
 pub use types::{
@@ -36,27 +33,6 @@ pub use types::{
     OtpRecipient, OtpType, ResetPasswordOptions, Session, SignOutScope, SignUpOptions,
     UpdateUserAttributes, User, VerifyOtpParams,
 };
-
-/// Legacy sign-up payload preserved for the deprecated [`SupabaseClient::sign_up`].
-#[derive(Debug, Clone, Serialize)]
-pub struct SignUpRequest {
-    pub email: String,
-    pub password: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-/// Legacy combined token+user payload. New code should use [`Session`].
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AuthResponse {
-    pub access_token: String,
-    pub expires_in: u64,
-    pub refresh_token: String,
-    pub token_type: String,
-    pub user: serde_json::Value,
-}
 
 impl SupabaseClient {
     /// Open the auth namespace.
@@ -444,100 +420,3 @@ fn build_sign_up_body(email: &str, password: &str, opts: &SignUpOptions) -> Valu
     body
 }
 
-// ---------------------------------------------------------------------------
-// Legacy top-level methods — preserved as deprecated wrappers.
-// ---------------------------------------------------------------------------
-
-impl SupabaseClient {
-    /// **Deprecated:** use [`client.auth().sign_up(...)`](Auth::sign_up).
-    #[deprecated(
-        since = "0.5.0",
-        note = "use `client.auth().sign_up(email, password, SignUpOptions::default())`"
-    )]
-    pub async fn sign_up(&self, sign_up_request: SignUpRequest) -> Result<AuthResponse> {
-        let value = build_legacy_sign_up_body(&sign_up_request);
-        let resp = self
-            .request_with(
-                "/auth/v1/signup",
-                HttpMethod::Post,
-                Some(value),
-                &RequestOptions::auth(),
-            )
-            .await?;
-        decode_legacy_auth_response(resp)
-    }
-
-    /// **Deprecated:** use [`client.auth().sign_in_with_password(...)`](Auth::sign_in_with_password).
-    #[deprecated(
-        since = "0.5.0",
-        note = "use `client.auth().sign_in_with_password(email, password)`"
-    )]
-    pub async fn sign_in(&self, email: &str, password: &str) -> Result<AuthResponse> {
-        let body = json!({ "email": email, "password": password });
-        let resp = self
-            .request_with(
-                "/auth/v1/token?grant_type=password",
-                HttpMethod::Post,
-                Some(body),
-                &RequestOptions::auth(),
-            )
-            .await?;
-        decode_legacy_auth_response(resp)
-    }
-
-    /// **Deprecated:** use [`client.auth().get_user()`](Auth::get_user).
-    #[deprecated(since = "0.5.0", note = "use `client.auth().get_user()`")]
-    pub async fn get_user(&self, access_token: &str) -> Result<Value> {
-        let opts = RequestOptions {
-            bearer_override: Some(access_token.to_string()),
-            ..RequestOptions::auth()
-        };
-        self.request_with("/auth/v1/user", HttpMethod::Get, None, &opts).await
-    }
-
-    /// **Deprecated:** use [`client.auth().admin().delete_user(...)`](AuthAdmin::delete_user).
-    #[deprecated(
-        since = "0.5.0",
-        note = "use `client.auth().admin().delete_user(user_id, false)`"
-    )]
-    pub async fn delete_user(&self, user_id: &str) -> Result<()> {
-        self.request_with(
-            &format!("/auth/v1/admin/users/{user_id}"),
-            HttpMethod::Delete,
-            None,
-            &RequestOptions::auth(),
-        )
-        .await?;
-        Ok(())
-    }
-}
-
-fn build_legacy_sign_up_body(req: &SignUpRequest) -> Value {
-    let mut body = json!({ "email": req.email, "password": req.password });
-    if let Some(name) = &req.name {
-        body["data"] = json!({ "name": name });
-    }
-    if let Some(uid) = &req.user_id {
-        body["user_id"] = json!(uid);
-    }
-    body
-}
-
-fn decode_legacy_auth_response(value: Value) -> Result<AuthResponse> {
-    if value.get("error_code").is_some() || value.get("error").is_some() {
-        let mut err: AuthError = serde_json::from_value(value.clone())
-            .unwrap_or_else(|_| AuthError::from_message(format!("Auth error: {value}")));
-        if err.message.is_empty() {
-            err.message = value
-                .get("msg")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Auth error")
-                .to_string();
-        }
-        return Err(SupabaseError::Auth(err));
-    }
-    serde_json::from_value(value.clone()).map_err(|e| SupabaseError::Decode {
-        message: e.to_string(),
-        body: value.to_string(),
-    })
-}

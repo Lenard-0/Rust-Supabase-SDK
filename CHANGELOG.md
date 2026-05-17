@@ -3,6 +3,83 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-05-17
+
+### Breaking — full removal of the pre-builder legacy API
+
+The crate now exposes a single, supabase-js-style surface. Every method
+previously marked `#[deprecated]` has been **deleted**. There is no
+backward-compatibility shim; this is a hard cut.
+
+#### Removed types and modules
+
+- `crate::select::*` — `Operator`, `Filter`, `FilterGroup`,
+  `LogicalOperator`, `Sort`, `SortDirection`, `SelectQuery`, `Field`,
+  `Query`, `Condition`, and the `query!` macro.
+- `crate::count` — module deleted.
+- `crate::get`, `crate::insert`, `crate::update`, `crate::delete` —
+  modules deleted.
+- `crate::auth::users` — `SupabaseUser`, the legacy admin user helpers.
+- `crate::auth::recover` — `forgot_password`, `reset_password`.
+- `crate::auth::SignUpRequest`, `crate::auth::AuthResponse` —
+  legacy payload structs.
+
+#### Removed `SupabaseClient` methods
+
+- `select`, `count`, `get_by_id`, `insert`, `upsert` (legacy),
+  `update` (legacy two-arg form), `delete` (legacy two-arg form).
+- `sign_up(SignUpRequest)`, `sign_in(email, password)`,
+  `get_user(token)`, `delete_user(user_id)`,
+  `get_all_users`, `get_user_by_id`,
+  `forgot_password`, `reset_password`.
+
+#### Migration map
+
+```text
+old                                              →  new
+─────────────────────────────────────────────────────────────────────────────
+client.select(table, SelectQuery{...})           →  client.from(table).select("*").eq(...).await
+client.get_by_id(table, id)                      →  client.from(table).select("*").eq("id", id).single().await
+client.insert(table, body)                       →  client.from(table).insert(body).select_returning("*").await
+client.upsert(table, body)                       →  client.from(table).upsert(body).on_conflict("id").await
+client.update(table, id, body)                   →  client.from(table).update(body).eq("id", id).await
+client.delete(table, id)                         →  client.from(table).delete().eq("id", id).await
+client.count(table, query)                       →  client.from(table).select("*").count(CountMode::Exact).execute_with_count().await
+client.rpc_call(name, args)                      →  client.rpc_call(name, args)   (unchanged)
+client.sign_up(SignUpRequest{...})               →  client.auth().sign_up(email, password, SignUpOptions{...}).await
+client.sign_in(email, password)                  →  client.auth().sign_in_with_password(email, password).await
+client.get_user(token)                           →  client.auth_with_token(token).get_user().await
+client.delete_user(id)                           →  client.auth().admin().delete_user(id, false).await
+client.get_all_users()                           →  client.auth().admin().list_users(1, 50).await
+client.get_user_by_id(id)                        →  client.auth().admin().get_user_by_id(id).await
+client.forgot_password(email)                    →  client.auth().reset_password_for_email(email, ResetPasswordOptions::default()).await
+client.reset_password(pw, tok, code)             →  client.auth().verify_otp(VerifyOtpParams::TokenHash{...}).await
+                                                     then client.auth().update_user(UpdateUserAttributes{password: Some(pw), ..}).await
+```
+
+#### Why
+
+The legacy DSL (`SelectQuery` + `FilterGroup` + the `query!` macro) was
+the original 0.1–0.2 surface. The PostgREST builder added in 0.3 covers
+every operator the old DSL supported plus everything `supabase-js` exposes
+(`maybe_single`, `single`, `range`, `text_search`, `not`, `or`,
+foreign-table ordering, `count`, `returns::<T>()`, typed deserialization,
+upsert with `on_conflict`, prefer headers, etc.). Maintaining two parallel
+surfaces doubled the API documentation, doubled the test matrix, and
+created a forking decision for every new user. Removing it leaves one
+canonical path: `client.from(...).<builder>.<await>`.
+
+#### Test suite changes
+- Deleted `tests/select_tests.rs`, `tests/filter_tests.rs`,
+  `tests/proptest_encoding.rs` (tested the deleted DSL types).
+- Rewrote `tests/basic_tests.rs` against the builder API
+  (`from(...).insert(...).select_returning(...)` etc.).
+- Pruned legacy wrapper tests from the mock suite; renamed
+  `legacy_and_remaining_mock_tests.rs` → `mock_coverage_tests.rs`.
+- Test count: **611 → 510** (101 fewer, because each legacy method had
+  duplicate tests covering the same wire-level behaviour as its
+  supabase-js-style replacement).
+
 ## [0.3.0] - 2026-05-17
 
 First release since 0.2.17. Bundles all unreleased work — foundation hardening,
