@@ -186,6 +186,14 @@ pub(crate) struct State {
     pub(crate) range: Option<(u64, u64)>,
     /// `true` once `.select()` has been called on a write op (Prefer: return=representation).
     pub(crate) return_representation: bool,
+    /// When set, [`execute_inner`] skips the HTTP call and returns an empty
+    /// result. Used by [`is_in`] on empty input — `WHERE x IN ()` matches
+    /// nothing in SQL, and PostgREST returns 400 on `id=in.()`, so we
+    /// short-circuit before going to the wire.
+    ///
+    /// [`execute_inner`]: PostgrestBuilder::execute_inner
+    /// [`is_in`]: PostgrestBuilder::is_in
+    pub(crate) short_circuit_empty_result: bool,
 }
 
 /// The main builder. Generic over the row type `T` (defaults to `serde_json::Value`).
@@ -418,6 +426,11 @@ impl<T: DeserializeOwned + Send + 'static> PostgrestBuilder<T> {
     async fn execute_inner(self) -> Result<(Option<u64>, Vec<T>)> {
         if let Some(msg) = &self.state.body_error {
             return Err(SupabaseError::Unexpected(format!("failed to serialize request body: {msg}")));
+        }
+        // `is_in([])` (and similar empty-set filters) provably match no rows.
+        // Skip the HTTP call rather than send a request PostgREST would 400 on.
+        if self.state.short_circuit_empty_result {
+            return Ok((Some(0), Vec::new()));
         }
         let path = self.build_path();
         let opts = self.build_options();

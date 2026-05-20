@@ -60,7 +60,7 @@ Runtime cost is zero — `Column<R, V>` is a `&'static str` plus a phantom type.
 
 ```toml
 [dependencies]
-rust_supabase_sdk = "0.4.1"
+rust_supabase_sdk = "0.4.2"
 ```
 
 **MSRV:** Rust 1.75.
@@ -108,7 +108,7 @@ async fn main() -> rust_supabase_sdk::Result<()> {
 Enable `realtime` explicitly:
 
 ```toml
-rust_supabase_sdk = { version = "0.4.1", features = ["realtime"] }
+rust_supabase_sdk = { version = "0.4.2", features = ["realtime"] }
 ```
 
 ## Customizing the client
@@ -166,11 +166,25 @@ impl Posts {
 ### Available filters on the typed builder
 
 `eq`, `neq`, `not_eq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `not_like`,
-`not_ilike`, `is_null`, `is_not_null`, `is_bool`, `in_`, `not_in_`, `contains`,
-`contained_by`, `overlaps`, `order`, `order_with`, `limit`, `offset`, `range`,
-`count`, `text_search`. Execution: `execute`, `execute_with_count`, `single`,
-`maybe_single`. Escape hatch: `.into_untyped()` drops to the string-typed
-`PostgrestBuilder` if you need an operation the typed surface doesn't cover.
+`not_ilike`, `is_null`, `is_not_null`, `is_bool`, `in_`, `is_in`, `not_in_`,
+`is_not_in`, `contains`, `contained_by`, `overlaps`, `order`, `order_with`,
+`limit`, `offset`, `range`, `count`, `text_search`. Execution: `execute`,
+`execute_with_count`, `single`, `maybe_single`. Escape hatch: `.into_untyped()`
+drops to the string-typed `PostgrestBuilder` if you need an operation the
+typed surface doesn't cover.
+
+`is_in` is the recommended set-membership filter — it compiles to
+`column=in.(v1,v2,v3)` and short-circuits empty input to `Ok(vec![])` without
+hitting the wire (matches SQL semantics; avoids PostgREST's 400 on
+`column=in.()`). Use it for batched primary-key fetches:
+
+```rust,ignore
+let chunks: Vec<DocumentChunks> = client
+    .from_row::<DocumentChunks>()
+    .is_in(DocumentChunks::id, chunk_ids)
+    .execute()
+    .await?;
+```
 
 ### When the compiler rejects a query
 

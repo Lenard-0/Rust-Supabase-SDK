@@ -3,6 +3,40 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-05-20
+
+### IN / NOT IN set-membership filters
+
+First-class `is_in` / `is_not_in` on both the string-typed `PostgrestBuilder`
+and the codegen-typed `TypedBuilder`. Compiles to PostgREST's
+`column=in.(v1,v2,v3)` / `column=not.in.(...)` URL syntax with full
+percent-encoding of values (commas, parens, quotes, spaces are all handled
+via `render_list`).
+
+#### Added
+
+- **`PostgrestBuilder::is_in(column, values)`** — accepts any
+  `IntoIterator<Item = V: PostgrestValue>`, so `&[T]`, `Vec<T>`, arrays,
+  and iterator adapters all work.
+- **`PostgrestBuilder::is_not_in(column, values)`** — negative variant
+  emitting `not.in.(...)`.
+- **`TypedBuilder::is_in(col, vals)` / `TypedBuilder::is_not_in(col, vals)`** —
+  typed wrappers; value type must match the column's declared type.
+
+#### Empty-input policy
+
+- `is_in([])` — provably matches no rows. The SDK sets a short-circuit flag
+  on the builder; `.execute()` returns `Ok(vec![])` without making the HTTP
+  call. Matches SQL semantics (`WHERE x IN ()` is FALSE) and avoids
+  PostgREST's 400 on `column=in.()`.
+- `is_not_in([])` — provably matches every row, so no filter is appended.
+  Matches SQL semantics (`WHERE x NOT IN ()` is TRUE).
+
+#### Compatibility
+
+Additive change. Existing `in_` / `not_in_` methods are untouched and keep
+their current (non-short-circuiting) behavior.
+
 ## [0.4.1] - 2026-05-17
 
 ### Postgres enum codegen

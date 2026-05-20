@@ -1,6 +1,6 @@
 [package]
 name = "rust_supabase_sdk"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 rust-version = "1.75"
 description = "Async Rust client for Supabase — PostgREST, Auth, Storage, Edge Functions, and Realtime. Builder-pattern API mirroring `supabase-js`, with a `cargo supabase` codegen for typed row structs."

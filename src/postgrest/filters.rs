@@ -83,6 +83,71 @@ impl<T> PostgrestBuilder<T> {
         self.add_filter(column, "in", &encode_value(&list))
     }
 
+    /// `column IN (a, b, c)` — set-membership filter.
+    ///
+    /// Compiles to PostgREST's `column=in.(v1,v2,v3)` URL syntax. Accepts any
+    /// [`IntoIterator`] of [`PostgrestValue`]s, so `&[T]`, `Vec<T>`, arrays,
+    /// and iterator adapters all work.
+    ///
+    /// # Empty input
+    ///
+    /// When `values` is empty, the request is short-circuited on the SDK
+    /// side: no HTTP call is made and `.execute()` returns `Ok(vec![])`.
+    /// This matches SQL semantics (`WHERE x IN ()` matches no rows) and
+    /// avoids PostgREST's 400 on `column=in.()`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use rust_supabase_sdk::SupabaseClient;
+    /// # async fn demo(client: SupabaseClient) -> rust_supabase_sdk::Result<()> {
+    /// let ids = vec!["a", "b", "c"];
+    /// let rows: Vec<serde_json::Value> = client
+    ///     .from("document_chunks")
+    ///     .select("*")
+    ///     .is_in("id", &ids)
+    ///     .eq("status", "active")
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn is_in<I, V>(mut self, column: &str, values: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: PostgrestValue,
+    {
+        let mut iter = values.into_iter().peekable();
+        if iter.peek().is_none() {
+            self.state.short_circuit_empty_result = true;
+            return self;
+        }
+        let list = render_list(iter);
+        self.add_filter(column, "in", &encode_value(&list))
+    }
+
+    /// `column NOT IN (a, b, c)` — inverse of [`is_in`].
+    ///
+    /// Compiles to PostgREST's `column=not.in.(v1,v2,v3)` URL syntax.
+    ///
+    /// # Empty input
+    ///
+    /// When `values` is empty, `WHERE x NOT IN ()` is always true (no
+    /// exclusions), so no filter is added to the request — all rows match.
+    /// This is the SQL-correct behavior and the opposite of [`is_in`].
+    ///
+    /// [`is_in`]: PostgrestBuilder::is_in
+    pub fn is_not_in<I, V>(self, column: &str, values: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: PostgrestValue,
+    {
+        let mut iter = values.into_iter().peekable();
+        if iter.peek().is_none() {
+            return self;
+        }
+        let list = render_list(iter);
+        self.add_filter(column, "not.in", &encode_value(&list))
+    }
+
     /// `column @> value` (array/range/jsonb contains).
     pub fn contains<V: PostgrestValue>(self, column: &str, value: V) -> Self {
         let encoded = encode_value(&value.render());
@@ -295,6 +360,158 @@ mod tests {
         assert!(p.contains("role=in."), "path={p}");
         assert!(p.contains("admin"), "path={p}");
         assert!(p.contains("user"), "path={p}");
+    }
+
+    // --- is_in / is_not_in ---
+
+    #[test]
+    fn is_in_three_element_input_renders_paren_list() {
+        let p = path(client().from("t").select("*").is_in("id", ["a", "b", "c"]));
+        // Encoded form: `id=in.(a,b,c)` → `id=in.%28a%2Cb%2Cc%29`
+        assert_eq!(
+            p,
+            "/rest/v1/t?select=%2A&id=in.%28a%2Cb%2Cc%29"
+        );
+    }
+
+    #[test]
+    fn is_in_single_element_input() {
+        let p = path(client().from("t").select("*").is_in("id", ["only"]));
+        assert_eq!(
+            p,
+            "/rest/v1/t?select=%2A&id=in.%28only%29"
+        );
+    }
+
+    #[test]
+    fn is_in_empty_input_short_circuits_and_omits_filter() {
+        let q = client().from("t").select("*").is_in("id", Vec::<&str>::new());
+        // The short-circuit flag is set so .execute() returns Ok(vec![]).
+        assert!(q.state.short_circuit_empty_result);
+        // No filter param was appended — the URL has no `id=in.` segment.
+        let p = q.build_path();
+        assert_eq!(p, "/rest/v1/t?select=%2A");
+        assert!(!p.contains("id=in."), "path={p}");
+    }
+
+    #[test]
+    fn is_in_empty_input_short_circuits_execute() {
+        // Round-trips through execute(): no HTTP needed because the short-circuit
+        // returns empty before request_full is called.
+        let q = client().from("t").select("*").is_in("id", Vec::<&str>::new());
+        let rows = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(q.execute())
+            .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn is_in_values_with_special_chars_are_quoted_and_encoded() {
+        // Embedded commas, parens, and spaces in values: render_list quotes the
+        // value, then urlencoding percent-encodes the whole thing.
+        let p = path(
+            client()
+                .from("t")
+                .select("*")
+                .is_in("name", ["a,b", "(c)", "d e"]),
+        );
+        // The literal list rendered before encoding is `("a,b","(c)",d e)`.
+        // After URL encoding: `(` → %28, `)` → %29, `,` → %2C, `"` → %22, space → %20.
+        assert!(p.contains("name=in."), "path={p}");
+        assert!(p.contains("%22a%2Cb%22"), "expected encoded quoted comma value, path={p}");
+        assert!(p.contains("%22%28c%29%22"), "expected encoded quoted paren value, path={p}");
+        assert!(p.contains("d%20e"), "expected encoded space, path={p}");
+    }
+
+    #[test]
+    fn is_in_with_string_slice_input() {
+        // Demonstrates &[&str] / Vec<&str> accepted via IntoIterator.
+        let ids: Vec<&str> = vec!["x", "y", "z"];
+        let p = path(client().from("t").select("*").is_in("id", &ids));
+        assert_eq!(p, "/rest/v1/t?select=%2A&id=in.%28x%2Cy%2Cz%29");
+    }
+
+    #[test]
+    fn is_in_with_owned_strings() {
+        let ids: Vec<String> = vec!["x".into(), "y".into()];
+        let p = path(client().from("t").select("*").is_in("id", ids));
+        assert_eq!(p, "/rest/v1/t?select=%2A&id=in.%28x%2Cy%29");
+    }
+
+    #[test]
+    fn is_in_with_integers() {
+        let p = path(client().from("t").select("*").is_in("id", [1i32, 2, 3]));
+        assert_eq!(p, "/rest/v1/t?select=%2A&id=in.%281%2C2%2C3%29");
+    }
+
+    #[test]
+    fn is_in_composes_with_eq() {
+        // Verifies AND-composition: both filters appear in the URL.
+        let p = path(
+            client()
+                .from("t")
+                .select("*")
+                .is_in("id", ["1", "2"])
+                .eq("status", "active"),
+        );
+        assert_eq!(
+            p,
+            "/rest/v1/t?select=%2A&id=in.%281%2C2%29&status=eq.active"
+        );
+    }
+
+    #[test]
+    fn is_in_composes_with_or() {
+        // is_in plus a raw OR group still serializes both.
+        let p = path(
+            client()
+                .from("t")
+                .select("*")
+                .is_in("id", ["1", "2"])
+                .or("status.eq.active,priority.gt.5"),
+        );
+        assert!(p.contains("id=in.%281%2C2%29"), "path={p}");
+        assert!(p.contains("or=%28status.eq.active%2Cpriority.gt.5%29"), "path={p}");
+    }
+
+    #[test]
+    fn is_not_in_three_element_input() {
+        let p = path(client().from("t").select("*").is_not_in("id", ["a", "b", "c"]));
+        assert_eq!(
+            p,
+            "/rest/v1/t?select=%2A&id=not.in.%28a%2Cb%2Cc%29"
+        );
+    }
+
+    #[test]
+    fn is_not_in_empty_input_matches_all() {
+        // `WHERE x NOT IN ()` is always TRUE, so no filter is emitted.
+        let q = client().from("t").select("*").is_not_in("id", Vec::<&str>::new());
+        assert!(!q.state.short_circuit_empty_result);
+        assert_eq!(q.build_path(), "/rest/v1/t?select=%2A");
+    }
+
+    #[test]
+    fn is_in_integration_url_round_trip() {
+        // Integration-style: builds the full PostgREST URL string a downstream
+        // service would send for "fetch chunks by ids". No network call.
+        let chunk_ids = vec![
+            "11111111-1111-1111-1111-111111111111".to_string(),
+            "22222222-2222-2222-2222-222222222222".to_string(),
+        ];
+        let url = path(
+            client()
+                .from("document_chunks")
+                .select("*")
+                .is_in("id", &chunk_ids),
+        );
+        assert_eq!(
+            url,
+            "/rest/v1/document_chunks?select=%2A&id=in.%28\
+             11111111-1111-1111-1111-111111111111%2C\
+             22222222-2222-2222-2222-222222222222%29"
+        );
     }
 
     #[test]

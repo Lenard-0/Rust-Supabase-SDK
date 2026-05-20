@@ -164,6 +164,61 @@ impl<R: Row> TypedBuilder<R> {
         self
     }
 
+    /// `column IN (vals)` — typed set-membership filter.
+    ///
+    /// Mirrors [`PostgrestBuilder::is_in`]: empty input short-circuits to an
+    /// empty result without an HTTP call. Value type must match the column.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use rust_supabase_sdk::{SupabaseClient, Row, postgrest::Column};
+    /// # use serde::{Serialize, Deserialize};
+    /// # #[derive(Debug, Clone, Serialize, Deserialize)]
+    /// # struct Posts { id: String, status: String }
+    /// # impl Row for Posts { const TABLE: &'static str = "posts"; }
+    /// # #[allow(non_upper_case_globals)]
+    /// # impl Posts {
+    /// #     pub const id: Column<Posts, String> = Column::new("id");
+    /// # }
+    /// # async fn demo(client: SupabaseClient) -> rust_supabase_sdk::Result<()> {
+    /// let ids: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+    /// let rows: Vec<Posts> = client
+    ///     .from_row::<Posts>()
+    ///     .is_in(Posts::id, ids)
+    ///     .execute()
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// [`PostgrestBuilder::is_in`]: crate::postgrest::PostgrestBuilder::is_in
+    pub fn is_in<V, I>(mut self, col: Column<R, V>, vals: I) -> Self
+    where
+        V: Serialize + std::fmt::Display,
+        I: IntoIterator<Item = V>,
+    {
+        self.inner = self
+            .inner
+            .is_in(col.name(), vals.into_iter().map(|v| v.to_string()));
+        self
+    }
+
+    /// `column NOT IN (vals)` — typed inverse of [`is_in`].
+    ///
+    /// Empty input is a no-op (matches all rows), per SQL semantics.
+    ///
+    /// [`is_in`]: TypedBuilder::is_in
+    pub fn is_not_in<V, I>(mut self, col: Column<R, V>, vals: I) -> Self
+    where
+        V: Serialize + std::fmt::Display,
+        I: IntoIterator<Item = V>,
+    {
+        self.inner = self
+            .inner
+            .is_not_in(col.name(), vals.into_iter().map(|v| v.to_string()));
+        self
+    }
+
     /// `column @> value` — array/jsonb containment.
     pub fn contains<V>(mut self, col: Column<R, V>, val: V) -> Self
     where
@@ -557,6 +612,37 @@ mod tests {
             .not_in_(Posts::status, ["x".to_string(), "y".to_string()])
             .build_path();
         assert!(p.contains("status=not.in"), "p={p}");
+    }
+
+    #[test]
+    fn typed_is_in_renders_paren_list() {
+        let p = client()
+            .from_row::<Posts>()
+            .is_in(
+                Posts::id,
+                ["a".to_string(), "b".to_string(), "c".to_string()],
+            )
+            .build_path();
+        assert_eq!(p, "/rest/v1/posts?select=%2A&id=in.%28a%2Cb%2Cc%29");
+    }
+
+    #[test]
+    fn typed_is_in_empty_input_omits_filter() {
+        let p = client()
+            .from_row::<Posts>()
+            .is_in(Posts::id, Vec::<String>::new())
+            .build_path();
+        // No `id=in.` segment — the short-circuit handles empty at execute time.
+        assert_eq!(p, "/rest/v1/posts?select=%2A");
+    }
+
+    #[test]
+    fn typed_is_not_in_renders_negated_op() {
+        let p = client()
+            .from_row::<Posts>()
+            .is_not_in(Posts::status, ["x".to_string(), "y".to_string()])
+            .build_path();
+        assert_eq!(p, "/rest/v1/posts?select=%2A&status=not.in.%28x%2Cy%29");
     }
 
     // ---- array/range ops ----
